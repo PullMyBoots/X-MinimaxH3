@@ -43,15 +43,14 @@ TXT 规范，覆盖 FL2VA 与 Ref2VA 的单视频、长视频在线逐窗和长�
 ## 视频教程
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">
-    <img src="assets/tutorial/bilibili-quick-guide.jpg" width="860" alt="让你的 MiniMax H3 快如闪电——X-MinimaxH3 简易教程">
+  <a href="https://www.bilibili.com/video/BV12PYd6XELW/?spm_id_from=333.1387.upload.video_card.click&amp;vd_source=3e73d78daf8cfe638fe517477471061e">
+    <img src="assets/tutorial/x-minimaxh3-tutorial-zh.png" width="860" alt="MiniMax H3 无限生成长视频——X-MinimaxH3 中文教程">
   </a>
 </p>
 
 <p align="center">
-  <strong>▶ 让你的 MiniMax H3 快如闪电</strong><br>
-  <sub>项目部署与使用简易教程 · 约 20 分钟 · BV1Fn8q6JEhX</sub><br>
-  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">前往哔哩哔哩观看完整视频</a>
+  <strong>▶ MiniMax H3 无限生成长视频</strong><br>
+  <a href="https://www.bilibili.com/video/BV12PYd6XELW/?spm_id_from=333.1387.upload.video_card.click&amp;vd_source=3e73d78daf8cfe638fe517477471061e">前往哔哩哔哩观看完整中文教程</a>
 </p>
 
 ## 效果实测对比

@@ -56,15 +56,14 @@ output format; use only the file matching the current task.
 ## Video tutorial
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">
-    <img src="assets/tutorial/bilibili-quick-guide.jpg" width="860" alt="Make MiniMax H3 lightning fast — X-MinimaxH3 quick guide">
+  <a href="https://youtu.be/KYkMspNGEh4">
+    <img src="assets/tutorial/x-minimaxh3-tutorial-en.png" width="860" alt="MiniMax H3 unlimited-length video generation — X-MinimaxH3 tutorial">
   </a>
 </p>
 
 <p align="center">
-  <strong>▶ Make MiniMax H3 lightning fast</strong><br>
-  <sub>Quick deployment and usage guide · About 20 minutes · BV1Fn8q6JEhX · Chinese narration</sub><br>
-  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">Watch the complete tutorial on Bilibili</a>
+  <strong>▶ MiniMax H3 unlimited-length video generation</strong><br>
+  <a href="https://youtu.be/KYkMspNGEh4">Watch the complete English tutorial on YouTube</a>
 </p>
 
 ## Measured effect comparison
