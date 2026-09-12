@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from h3serve.native_engine.runtime import ImmutablePinnedModuleResidency
 from h3serve.native_engine.runtime.pinned_pool import pack_pinned_tensors
+from h3serve.native_engine.hot_session import _is_cuda_context_fatal
 
 
 class _SharedWeightModule(nn.Module):
@@ -18,7 +19,23 @@ class _SharedWeightModule(nn.Module):
         self.register_buffer("scale", torch.tensor([2.0]))
 
 
+class _TwoBlockModule(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocks = nn.ModuleList([
+            nn.Linear(512, 512, bias=False),
+            nn.Linear(512, 512, bias=False),
+        ])
+
+
 class ImmutablePinnedModuleResidencyTest(unittest.TestCase):
+    def test_device_not_ready_is_a_fatal_cuda_context_error(self) -> None:
+        self.assertTrue(
+            _is_cuda_context_fatal(
+                RuntimeError("CUDA driver error: device not ready")
+            )
+        )
+
     def test_cpu_round_trip_preserves_values_and_aliases(self) -> None:
         module = _SharedWeightModule()
         residency = ImmutablePinnedModuleResidency(
@@ -73,6 +90,78 @@ class ImmutablePinnedModuleResidencyTest(unittest.TestCase):
         copied = packed.tensors[0].to("cuda:0", non_blocking=True)
         torch.cuda.synchronize()
         torch.testing.assert_close(copied.cpu(), contiguous)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_pinned_preparation_reports_reclaimable_source_bytes(self) -> None:
+        module = _SharedWeightModule()
+        copied: list[int] = []
+        residency = ImmutablePinnedModuleResidency(
+            "tiny",
+            module,
+            pin_host_weights=True,
+            copy_host_weights=True,
+            source_copied=copied.append,
+        )
+        residency.prepare_host()
+        self.assertTrue(copied)
+        self.assertEqual(sum(copied), residency.host_bytes)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_in_place_pin_keeps_original_storage_without_second_master(self) -> None:
+        module = _SharedWeightModule()
+        original_pointer = module.weight.data_ptr()
+        residency = ImmutablePinnedModuleResidency(
+            "tiny",
+            module,
+            pin_host_weights=True,
+            copy_host_weights=False,
+        )
+        residency.prepare_host()
+        self.assertEqual(module.weight.data_ptr(), original_pointer)
+        self.assertTrue(residency.host_is_pinned)
+        self.assertGreaterEqual(residency.host_allocated_bytes, residency.host_bytes)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_repeated_partition_move_reuses_identical_device_storage(self) -> None:
+        module = _TwoBlockModule()
+        residency = ImmutablePinnedModuleResidency(
+            "partitioned", module, pin_host_weights=False
+        )
+        residency.prepare_host()
+        prefixes = ("blocks.1",)
+
+        residency.move_partition_to_cuda(
+            "cuda:0", host_module_prefixes=prefixes
+        )
+        torch.cuda.synchronize()
+        first_pointer = module.blocks[0].weight.data_ptr()
+        self.assertEqual(module.blocks[0].weight.device.type, "cuda")
+        self.assertEqual(module.blocks[1].weight.device.type, "cpu")
+
+        residency.move_partition_to_cuda(
+            "cuda:0", host_module_prefixes=prefixes
+        )
+        torch.cuda.synchronize()
+        self.assertEqual(module.blocks[0].weight.data_ptr(), first_pointer)
+        residency.move_to("cpu", non_blocking=False)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required")
+    def test_partial_pin_budget_registers_complete_module_prefix(self) -> None:
+        module = _TwoBlockModule()
+        one_block_bytes = module.blocks[0].weight.numel() * 4
+        residency = ImmutablePinnedModuleResidency(
+            "partial",
+            module,
+            pin_host_weights=True,
+            copy_host_weights=False,
+            pin_host_budget_bytes=one_block_bytes,
+            pin_host_module_prefixes=("blocks.0", "blocks.1"),
+        )
+        residency.prepare_host()
+
+        self.assertFalse(residency.host_is_pinned)
+        self.assertEqual(residency.host_pinned_bytes, one_block_bytes)
+        self.assertAlmostEqual(residency.host_pinned_fraction, 0.5)
 
 
 if __name__ == "__main__":

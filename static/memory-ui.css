@@ -25,21 +25,60 @@
 #settingsDialog .submit-button.small { height: 38px; font-size: 10px; }
 
 .memory-settings,
-.lora-settings,
-.reference-media-settings,
-.checkpoint-preview-settings,
-.second-sampling-settings,
-.generation-limit-settings {
+.generation-limit-settings,
+.service-settings-drawer {
   margin: 20px 0 16px;
-  padding: 16px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: rgba(3, 5, 9, .42);
 }
-.lora-settings,
-.reference-media-settings,
-.checkpoint-preview-settings,
-.second-sampling-settings,
+.memory-settings,
+.generation-limit-settings { padding: 16px; }
+.service-settings-drawer { margin: 10px 0 0; overflow: hidden; }
+.service-settings-drawer > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 14px;
+  color: #e6e9f0;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.service-settings-drawer > summary::-webkit-details-marker { display: none; }
+.service-settings-drawer > summary:before {
+  content: "›";
+  color: var(--muted);
+  font-size: 16px;
+  transform: rotate(0deg);
+  transition: transform .16s ease;
+}
+.service-settings-drawer[open] > summary:before { transform: rotate(90deg); }
+.service-settings-drawer > summary > span {
+  flex: 1;
+  font-size: 9px;
+  font-weight: 800;
+}
+.service-settings-drawer > summary > b {
+  color: #91c7ff;
+  font-size: 8px;
+  font-weight: 650;
+}
+.service-settings-drawer-body {
+  padding: 14px;
+  border-top: 1px solid var(--line);
+}
+.service-settings-drawer-body > p {
+  margin: 10px 0 0 !important;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.55;
+}
+.service-settings-drawer-body .inline-tool-row { margin-bottom: 12px; }
+#globalSecondSamplingWindowControls[hidden] { display: none; }
+#globalSecondSamplingWindowControls .field { margin: 0; }
 .generation-limit-settings { margin-bottom: 0; }
 .settings-inline-grid {
   display: grid;
@@ -47,45 +86,38 @@
   gap: 9px;
 }
 .settings-inline-grid .field { margin: 0; }
-.lora-settings > p,
-.reference-media-settings > p,
-.checkpoint-preview-settings > p,
-.second-sampling-settings > p,
 .generation-limit-settings > p {
   margin: 10px 0 0 !important;
   color: var(--muted);
   font-size: 8px;
   line-height: 1.55;
 }
-.second-sampling-settings .field { margin: 0; }
-.second-sampling-settings input[type="range"] { accent-color: #ff8258; }
-
-.compact-second-sampling-dialog {
-  width: min(390px, calc(100% - 30px));
+.compact-video-repair-dialog {
+  width: min(520px, calc(100% - 30px));
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
   padding: 18px;
   font-size: 10px;
 }
-.compact-second-sampling-dialog .dialog-heading { margin-bottom: 10px; }
-.compact-second-sampling-dialog .dialog-heading h3 { font-size: 14px; }
-.compact-second-sampling-dialog .dialog-heading button { font-size: 18px; }
-.compact-second-sampling-dialog .field > span {
+.compact-video-repair-dialog .dialog-heading { margin-bottom: 10px; }
+.compact-video-repair-dialog .dialog-heading h3 { font-size: 14px; }
+.compact-video-repair-dialog .dialog-heading button { font-size: 18px; }
+.compact-video-repair-dialog .field > span {
   margin-bottom: 6px;
   font-size: 9px;
 }
-.compact-second-sampling-dialog .field input,
-.compact-second-sampling-dialog .field select {
+.compact-video-repair-dialog .field input,
+.compact-video-repair-dialog .field select {
   height: 36px;
   font-size: 10px;
 }
-.compact-second-sampling-dialog .field > small,
-.compact-second-sampling-dialog p {
+.compact-video-repair-dialog .field > small,
+.compact-video-repair-dialog p {
   font-size: 8px;
   line-height: 1.45;
 }
-.compact-second-sampling-dialog .settings-inline-grid { gap: 8px; }
-.compact-second-sampling-dialog .submit-button.small {
+.compact-video-repair-dialog .settings-inline-grid { gap: 8px; }
+.compact-video-repair-dialog .submit-button.small {
   height: 38px;
   font-size: 10px;
 }

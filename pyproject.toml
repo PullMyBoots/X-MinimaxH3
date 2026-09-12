@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "x-minimaxh3"
-version = "1.0.0"
+version = "1.1.0"
 description = "Resource-tiered MiniMax H3 video generation service for NVIDIA SM89"
 requires-python = "==3.10.*"
 dependencies = [
@@ -13,7 +13,9 @@ dependencies = [
   "huggingface-hub>=0.34,<2",
   "safetensors>=0.7,<1",
   "numpy>=2.2,<3",
+  "opencv-python-headless>=4.10,<5",
   "scipy>=1.15,<1.16",
+  "webrtcvad-wheels==2.0.14",
   "av>=17,<18",
   "diffusers==0.35.2",
   "einops>=0.8,<1",
@@ -28,4 +30,5 @@ dependencies = [
 include = ["h3serve*"]
 
 [tool.setuptools.package-data]
+"h3serve" = ["assets/*.onnx", "assets/*.md"]
 "h3serve.native_engine.planner" = ["evidence/*.json"]

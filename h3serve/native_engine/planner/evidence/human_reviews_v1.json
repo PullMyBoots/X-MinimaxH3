@@ -1,7 +1,7 @@
 {
   "schema_version": "h3_human_scheduler_evidence_v1",
   "scope": "Blind or direct Human continuous-play reviews of H3 scheduling candidates. These labels calibrate and challenge risk assumptions; they do not certify a different policy.",
-  "source_summary": "docs/research/idea-list.md",
+  "source_summary": "subprojects-main/main/DIT-knowledge/idea-list.md",
   "records": [
     {
       "evidence_id": "H-SCHED-025",

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Literal
 
 
@@ -194,7 +195,14 @@ def load_v19_human_evidence(
                         if label == "candidate"
                         else "comparator_artifact_sha256"
                     )
-                    artifact_digests[label] = row.get(digest_key)
+                    digest = row.get(digest_key)
+                    if not isinstance(digest, str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", digest
+                    ):
+                        raise V19EvidenceError(
+                            f"{row['evidence_id']}: missing portable {label} digest"
+                        )
+                    artifact_digests[label] = digest
             record = V19HumanEvidenceRecord(
                 evidence_id=row["evidence_id"],
                 mechanism=row["mechanism"],

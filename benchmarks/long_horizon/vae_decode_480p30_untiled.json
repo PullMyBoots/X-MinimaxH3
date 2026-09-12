@@ -1,0 +1,41 @@
+{
+  "schema_version": "h3_video_vae_long_decode_sm89_v1",
+  "device": "NVIDIA GeForce RTX 4090",
+  "torch_version": "2.13.0+cu130",
+  "geometry": [
+    864,
+    480,
+    719
+  ],
+  "latent_shape": [
+    1,
+    24,
+    212,
+    30,
+    54
+  ],
+  "checkpoint": "/root/h3-model-store/vae/minimax_h3_video_vae_fp16.safetensors",
+  "checkpoint_weights_changed": false,
+  "tile_size": 288,
+  "tile_batch_size": 1,
+  "temporal_host_chunk_frames": null,
+  "enforced_vram_gib": 23.25,
+  "transformer_block_compile": true,
+  "uint8_postprocess_frame_chunk": null,
+  "load_and_compile_seconds": 24.800378597981762,
+  "decode_seconds": 29.43507657101145,
+  "baseline_allocated_gib": 4.893617153167725,
+  "peak_allocated_gib": 15.755696296691895,
+  "incremental_peak_gib": 10.86207914352417,
+  "output_shape": [
+    1,
+    3,
+    719,
+    480,
+    864
+  ],
+  "output_bytes": 894551040,
+  "output_sha256": "cb3273bd8753a33e9dc793d33378000ec7e24b36f4f75c2736538effea6ddd23",
+  "physical_24gib_fit": true,
+  "configured_budget_fit": true
+}

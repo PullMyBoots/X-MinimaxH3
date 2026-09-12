@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "purpose": "V22 exact execution retry after fail-closed per-thread Dense fallback. Control timing and output are retained in batch21.",
+  "anchor": "720p10_seed82341_radio_console_quality20.json",
+  "candidates": [
+    {
+      "version": "v22_exec_split_single_sparse_only",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 8192,
+      "long_sequence_split_qkv_outputs": true,
+      "long_sequence_single_qknorm_rope": true,
+      "long_sequence_parallel_sparse_lut": false
+    },
+    {
+      "version": "v22_exec_split_single_parallel_lut_sparse_only",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 8192,
+      "long_sequence_split_qkv_outputs": true,
+      "long_sequence_single_qknorm_rope": true,
+      "long_sequence_parallel_sparse_lut": true
+    }
+  ]
+}

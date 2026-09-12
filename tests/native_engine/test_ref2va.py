@@ -10,7 +10,10 @@ import numpy as np
 import torch
 
 from h3serve.contract import GenerationSpec, default_quality, public_options
-from h3serve.native_engine.model.packed import build_ref2va_layout
+from h3serve.native_engine.model.packed import (
+    build_hybrid_condition_layout,
+    build_ref2va_layout,
+)
 from h3serve.native_engine.adapters.conditioning_vae.preprocess import (
     _reference_geometry,
     prepare_reference_audios,
@@ -20,10 +23,404 @@ from h3serve.native_engine.adapters.conditioning_vae.preprocess import (
 from h3serve.native_engine.adapters.conditioning_vae.contracts import PreparedReferenceVideo
 from h3serve.native_engine.adapters.conditioning_vae.qwen_quantized import PackedQwen3VLT2AVConditioner
 from h3serve.native_engine.adapters.conditioning_vae.video_vae import H3VideoVAEAdapter
-from h3serve.native_engine.hot_session import HotSessionRequest, NativeT2AVHotSession
+from h3serve.native_engine.hot_session import (
+    HotSessionRequest,
+    NativeT2AVHotSession,
+    _authority_conditioning_route_name,
+    _blend_continuation_boundary_velocity,
+    _blend_layout_guidance_velocity,
+    _compose_authority_routed_conditioning,
+    _compose_conditioning,
+    _continuation_text_route_name,
+    _explicit_camera_layout_guidance_schedule,
+    _layout_guidance_route_name,
+    _progressive_conditioning_route_name,
+)
 
 
 class Ref2VAContractTest(unittest.TestCase):
+    def test_continuation_boundary_auxiliary_runs_at_every_solver_step(self) -> None:
+        self.assertEqual(
+            [_continuation_text_route_name(index, 7) for index in range(7)],
+            ["boundary"] * 7,
+        )
+
+    def test_continuation_boundary_velocity_is_local_to_writable_band(self) -> None:
+        current = torch.zeros((1, 2, 20, 1, 1), dtype=torch.float32)
+        boundary = torch.full_like(current, 10.0)
+        blended = _blend_continuation_boundary_velocity(
+            current,
+            boundary,
+            protected_prefix_tokens=5,
+            hidden_repaint_tokens=3,
+            visible_fade_tokens=4,
+            peak=1.0,
+        )
+        self.assertTrue(torch.equal(blended[:, :, :5], current[:, :, :5]))
+        self.assertTrue(torch.equal(blended[:, :, 12:], current[:, :, 12:]))
+        self.assertTrue(torch.allclose(
+            blended[:, :, 5:8], torch.full_like(blended[:, :, 5:8], 10.0)
+        ))
+        self.assertTrue(torch.allclose(
+            blended[:, :, 8], torch.full_like(blended[:, :, 8], 7.5)
+        ))
+        self.assertTrue(torch.allclose(
+            blended[:, :, 9], torch.full_like(blended[:, :, 9], 5.0)
+        ))
+        self.assertTrue(torch.allclose(
+            blended[:, :, 10], torch.full_like(blended[:, :, 10], 2.5)
+        ))
+        self.assertTrue(torch.equal(blended[:, :, 11], current[:, :, 11]))
+
+    def test_explicit_layout_anchor_keeps_state_primary_and_guides_middle_steps(self) -> None:
+        layout = torch.full((1, 24, 1, 4, 6), 10.0)
+        layout_late = torch.full((1, 24, 1, 4, 6), 11.0)
+        state = torch.full((1, 24, 1, 4, 6), 20.0)
+        routes, profile = _compose_authority_routed_conditioning(
+            user_video_latents=(),
+            user_reference_shapes=(),
+            user_reference_kinds=(),
+            user_audio_latents=(),
+            user_audio_frames=(),
+            memory_video_latents=(state,),
+            memory_reference_shapes=((1, 4, 6),),
+            memory_reference_kinds=("image",),
+            memory_audio_latents=(),
+            memory_audio_frames=(),
+            keyframe_latents=(),
+            keyframe_indices=(),
+            user_references_requested=False,
+            memory_layout_video_latents=(layout, layout_late),
+            memory_layout_reference_shapes=((1, 4, 6), (1, 4, 6)),
+            memory_layout_reference_kinds=("image", "image"),
+            state_seeded_layout_memory=True,
+        )
+        self.assertEqual(set(routes), {"reference", "history"})
+        self.assertIs(routes["reference"].video_latents[0], layout)
+        self.assertIs(routes["reference"].video_latents[1], layout_late)
+        self.assertIs(routes["history"].video_latents[0], state)
+        self.assertEqual(
+            profile["visual_policy"],
+            "state_primary_layout_velocity_guidance",
+        )
+        self.assertEqual(
+            [
+                _progressive_conditioning_route_name(
+                    index,
+                    7,
+                    visual_schedule=True,
+                    inferred_voice_bootstrap=False,
+                    layout_memory_bootstrap=True,
+                    state_seeded_layout_bootstrap=True,
+                )
+                for index in range(7)
+            ],
+            ["history"] * 7,
+        )
+        self.assertEqual(_explicit_camera_layout_guidance_schedule(7), (2, 3))
+        self.assertEqual(_explicit_camera_layout_guidance_schedule(3), (1, 1))
+        self.assertEqual(_layout_guidance_route_name("history"), "reference")
+        self.assertEqual(
+            _layout_guidance_route_name("history_release"),
+            "reference_release",
+        )
+        self.assertEqual(
+            [
+                _progressive_conditioning_route_name(
+                    index,
+                    7,
+                    visual_schedule=True,
+                    inferred_voice_bootstrap=False,
+                    layout_memory_bootstrap=True,
+                )
+                for index in range(7)
+            ],
+            ["reference"] * 3 + ["history"] * 4,
+        )
+
+    def test_layout_guidance_blends_one_full_video_velocity_only(self) -> None:
+        state = torch.zeros((1, 2, 3, 2, 2), dtype=torch.float32)
+        layout = torch.full_like(state, 8.0)
+        blended = _blend_layout_guidance_velocity(
+            state,
+            layout,
+            weight=0.25,
+        )
+        self.assertTrue(torch.equal(blended, torch.full_like(state, 2.0)))
+
+    def test_novel_camera_uses_one_layout_probe_between_text_only_steps(self) -> None:
+        layout = torch.full((1, 24, 1, 4, 6), 8.0)
+        routes, profile = _compose_authority_routed_conditioning(
+            user_video_latents=(),
+            user_reference_shapes=(),
+            user_reference_kinds=(),
+            user_audio_latents=(),
+            user_audio_frames=(),
+            memory_video_latents=(),
+            memory_reference_shapes=(),
+            memory_reference_kinds=(),
+            memory_audio_latents=(),
+            memory_audio_frames=(),
+            keyframe_latents=(),
+            keyframe_indices=(),
+            user_references_requested=False,
+            memory_layout_video_latents=(layout,),
+            memory_layout_reference_shapes=((1, 4, 6),),
+            memory_layout_reference_kinds=("image",),
+            novel_camera_layout_probe=True,
+        )
+        self.assertEqual(set(routes), {"reference", "history"})
+        self.assertIs(routes["reference"].video_latents[0], layout)
+        self.assertEqual(routes["history"].video_latents, ())
+        self.assertEqual(
+            profile["visual_policy"],
+            "target_camera_seed_layout_probe_text_convergence",
+        )
+        self.assertEqual(
+            [
+                _progressive_conditioning_route_name(
+                    index,
+                    7,
+                    visual_schedule=True,
+                    inferred_voice_bootstrap=False,
+                    layout_memory_bootstrap=True,
+                    novel_camera_layout_probe=True,
+                )
+                for index in range(7)
+            ],
+            [
+                "history",
+                "history",
+                "reference",
+                "history",
+                "history",
+                "history",
+                "history",
+            ],
+        )
+
+    def test_authority_routing_never_presents_user_and_memory_as_duplicate_evidence(self) -> None:
+        user_image = torch.full((1, 24, 1, 4, 6), 11.0)
+        memory_image = torch.full((1, 24, 1, 4, 6), 22.0)
+        user_audio = torch.full((1, 32, 2, 3), 33.0)
+        memory_audio = torch.full((1, 32, 2, 1), 44.0)
+        routes, profile = _compose_authority_routed_conditioning(
+            user_video_latents=(user_image,),
+            user_reference_shapes=((1, 4, 6),),
+            user_reference_kinds=("image",),
+            user_audio_latents=(user_audio,),
+            user_audio_frames=(3,),
+            memory_video_latents=(memory_image,),
+            memory_reference_shapes=((1, 4, 6),),
+            memory_reference_kinds=("image",),
+            memory_audio_latents=(memory_audio,),
+            memory_audio_frames=(1,),
+            keyframe_latents=(),
+            keyframe_indices=(),
+            user_references_requested=True,
+        )
+        self.assertEqual(set(routes), {"history", "reference"})
+        self.assertIs(routes["history"].video_latents[0], memory_image)
+        self.assertIs(routes["reference"].video_latents[0], user_image)
+        self.assertIs(routes["history"].audio_latents[0], user_audio)
+        self.assertIs(routes["reference"].audio_latents[0], user_audio)
+        self.assertTrue(all(
+            latent is not memory_audio
+            for latent in routes["history"].audio_latents
+        ))
+        self.assertEqual(profile["suppressed_memory_audio_references"], 1)
+        self.assertFalse(
+            profile["simultaneous_user_and_memory_visual_references"]
+        )
+        self.assertEqual(
+            [_authority_conditioning_route_name(index, 7) for index in range(7)],
+            ["history"] * 7,
+        )
+
+    def test_user_reference_media_precedes_and_survives_bounded_memory_merge(self) -> None:
+        user_image = torch.full((1, 24, 1, 4, 6), 11.0)
+        memory_image = torch.full((1, 24, 1, 4, 6), 22.0)
+        last_frame = torch.full((1, 24, 1, 4, 6), 33.0)
+        user_audio = torch.full((1, 32, 2, 3), 44.0)
+        memory_audio = torch.full((1, 32, 2, 1), 55.0)
+        composition = _compose_conditioning(
+            user_video_latents=(user_image,),
+            user_reference_shapes=((1, 4, 6),),
+            user_reference_kinds=("image",),
+            user_audio_latents=(user_audio,),
+            user_audio_frames=(3,),
+            memory_video_latents=(memory_image,),
+            memory_reference_shapes=((1, 4, 6),),
+            memory_reference_kinds=("image",),
+            memory_audio_latents=(memory_audio,),
+            memory_audio_frames=(1,),
+            keyframe_latents=(last_frame,),
+            keyframe_indices=(-1,),
+            user_references_requested=True,
+        )
+        self.assertIs(composition.video_latents[0], user_image)
+        self.assertIs(composition.video_latents[1], memory_image)
+        self.assertIs(composition.video_latents[2], last_frame)
+        self.assertIs(composition.audio_latents[0], user_audio)
+        self.assertIs(composition.audio_latents[1], memory_audio)
+        self.assertEqual(composition.reference_shapes, ((1, 4, 6), (1, 4, 6)))
+        self.assertEqual(composition.reference_audio_frames, (3, 1))
+        self.assertEqual(composition.profile["mode"], "hybrid_reference_keyframe")
+        self.assertTrue(composition.profile["user_conditions_retained"])
+
+    def test_inferred_voice_is_present_only_on_bootstrap_route(self) -> None:
+        memory_image = torch.full((1, 24, 1, 4, 6), 22.0)
+        memory_audio = torch.full((1, 32, 2, 20), 55.0)
+        routes, profile = _compose_authority_routed_conditioning(
+            user_video_latents=(),
+            user_reference_shapes=(),
+            user_reference_kinds=(),
+            user_audio_latents=(),
+            user_audio_frames=(),
+            memory_video_latents=(memory_image,),
+            memory_reference_shapes=((1, 4, 6),),
+            memory_reference_kinds=("image",),
+            memory_audio_latents=(memory_audio,),
+            memory_audio_frames=(20,),
+            keyframe_latents=(),
+            keyframe_indices=(),
+            user_references_requested=False,
+        )
+        self.assertEqual(set(routes), {"default_voice", "default_release"})
+        self.assertIs(routes["default_voice"].audio_latents[0], memory_audio)
+        self.assertEqual(routes["default_release"].audio_latents, ())
+        self.assertIs(routes["default_voice"].video_latents[0], memory_image)
+        self.assertIs(routes["default_release"].video_latents[0], memory_image)
+        self.assertEqual(
+            profile["audio_policy"],
+            "inferred_short_voice_high_noise_bootstrap_v1",
+        )
+        self.assertEqual(
+            [
+                _progressive_conditioning_route_name(
+                    index,
+                    12,
+                    visual_schedule=False,
+                    inferred_voice_bootstrap=True,
+                )
+                for index in range(12)
+            ],
+            ["default_voice"] * 4 + ["default_release"] * 8,
+        )
+
+    def test_ref2va_keeps_frozen_inferred_voice_on_every_denoise_route(self) -> None:
+        memory_image = torch.full((1, 24, 1, 4, 6), 22.0)
+        memory_audio = torch.full((1, 32, 2, 120), 55.0)
+        routes, profile = _compose_authority_routed_conditioning(
+            user_video_latents=(),
+            user_reference_shapes=(),
+            user_reference_kinds=(),
+            user_audio_latents=(),
+            user_audio_frames=(),
+            memory_video_latents=(memory_image,),
+            memory_reference_shapes=((1, 4, 6),),
+            memory_reference_kinds=("image",),
+            memory_audio_latents=(memory_audio,),
+            memory_audio_frames=(120,),
+            keyframe_latents=(),
+            keyframe_indices=(),
+            user_references_requested=False,
+            supports_persistent_inferred_audio=True,
+        )
+        self.assertEqual(set(routes), {"default"})
+        self.assertIs(routes["default"].audio_latents[0], memory_audio)
+        self.assertEqual(
+            profile["audio_policy"],
+            "ref2va_persistent_self_anchor_voice_v1",
+        )
+
+    def test_audio_only_and_silent_memory_routes_need_no_visual_references(self) -> None:
+        voice = torch.full((1, 32, 2, 120), 55.0)
+        arguments = dict(
+            user_video_latents=(), user_reference_shapes=(),
+            user_reference_kinds=(), user_audio_latents=(), user_audio_frames=(),
+            memory_video_latents=(), memory_reference_shapes=(),
+            memory_reference_kinds=(), keyframe_latents=(), keyframe_indices=(),
+            user_references_requested=False, supports_persistent_inferred_audio=True,
+        )
+        for audio, frames in (((), ()), ((voice,), (120,))):
+            routes, profile = _compose_authority_routed_conditioning(
+                **arguments, memory_audio_latents=audio, memory_audio_frames=frames,
+            )
+            self.assertEqual(set(routes), {"default"})
+            self.assertEqual(routes["default"].video_latents, ())
+            self.assertEqual(routes["default"].reference_shapes, ())
+            self.assertEqual(routes["default"].reference_audio_frames, frames)
+            if audio:
+                self.assertIs(routes["default"].audio_latents[0], voice)
+                self.assertEqual(profile["audio_policy"], "ref2va_persistent_self_anchor_voice_v1")
+            else:
+                self.assertEqual(routes["default"].profile["mode"], "no_reference_rows")
+        arguments["user_references_requested"] = True
+        with self.assertRaisesRegex(ValueError, "composition cannot be empty"):
+            _compose_authority_routed_conditioning(
+                **arguments, memory_audio_latents=(), memory_audio_frames=(),
+            )
+
+    def test_public_audio_remains_authoritative_across_visual_routes(self) -> None:
+        self.assertEqual(
+            [
+                _progressive_conditioning_route_name(
+                    index,
+                    7,
+                    visual_schedule=True,
+                    inferred_voice_bootstrap=False,
+                )
+                for index in range(7)
+            ],
+            ["history"] * 7,
+        )
+
+    def test_request_planner_counts_keyframe_and_memory_tokens_together(self) -> None:
+        from h3serve.native_engine.av_token_memory import empty_av_token_memory
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memory_path = root / "memory.pt"
+            memory = empty_av_token_memory()
+            memory["video_entries"] = [
+                {
+                    "position": index,
+                    "latent": torch.zeros((1, 24, 1, 30, 54)),
+                }
+                for index in (0, 100)
+            ]
+            memory["audio_entries"] = [{
+                "position": 0,
+                "latent": torch.zeros((1, 32, 2, 20)),
+            }]
+            torch.save(memory, memory_path)
+            session = NativeT2AVHotSession.__new__(NativeT2AVHotSession)
+            session.engine = "lora"
+            features = session._analyze_request_features(
+                HotSessionRequest(
+                    prompt="planner contract",
+                    seed=1,
+                    width=864,
+                    height=480,
+                    frames=362,
+                    fps=24,
+                    steps=7,
+                    output_path=root / "unused.mp4",
+                    last_frame=root / "last.png",
+                    av_token_memory_path=memory_path,
+                    use_lora=True,
+                ),
+                text_tokens=100,
+            )
+
+        spatial_tokens = (864 // 32) * (480 // 32)
+        self.assertEqual(features.condition_count, 4)
+        self.assertEqual(
+            features.condition_tokens,
+            spatial_tokens + 2 * spatial_tokens + 40,
+        )
+
     def test_qwen_vision_cache_key_is_content_and_geometry_addressed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "person.png"
@@ -331,6 +728,83 @@ class Ref2VAContractTest(unittest.TestCase):
         )
         self.assertEqual(int((~layout.audio_update_mask).sum()), 2 * (90 + 41))
         self.assertTrue(torch.all(layout.audio_update_mask[-414:]))
+
+    def test_hybrid_memory_and_last_frame_keep_distinct_temporal_roles(self) -> None:
+        layout = build_hybrid_condition_layout(
+            text_length=4,
+            latent_frames=3,
+            latent_height=4,
+            latent_width=6,
+            audio_frames=5,
+            reference_shapes=((1, 4, 6), (1, 2, 4)),
+            reference_kinds=("image", "image"),
+            reference_audio_frames=(2,),
+            keyframe_indices=(-1,),
+            output_frame_count=39,
+        )
+        self.assertEqual(
+            [segment.kind for segment in layout.segments],
+            [
+                "text",
+                "condition",
+                "condition",
+                "ref_audio",
+                "condition",
+                "audio",
+                "video",
+            ],
+        )
+        conditions = [
+            segment for segment in layout.segments if segment.kind == "condition"
+        ]
+        memory_conditions, keyframe_condition = conditions[:2], conditions[-1]
+        target_video = layout.segment("video")
+        target_last_time = layout.position_ids[target_video.stop - 1, 0]
+
+        # Reference-style memory owns its own leading rotary chart, while the
+        # FL2VA endpoint retains the exact last target-video time coordinate.
+        self.assertTrue(torch.all(
+            layout.position_ids[
+                memory_conditions[0].start:memory_conditions[0].stop, 0
+            ] == 4
+        ))
+        self.assertTrue(torch.all(
+            layout.position_ids[
+                memory_conditions[1].start:memory_conditions[1].stop, 0
+            ] == 5
+        ))
+        self.assertTrue(torch.all(
+            layout.position_ids[
+                keyframe_condition.start:keyframe_condition.stop, 0
+            ] == target_last_time
+        ))
+        self.assertEqual(
+            int((~layout.video_update_mask).sum()),
+            (4 // 2) * (6 // 2) + (2 // 2) * (4 // 2) + (4 // 2) * (6 // 2),
+        )
+        self.assertEqual(int((~layout.audio_update_mask).sum()), 4)
+        self.assertTrue(torch.all(layout.video_update_mask[-3 * 2 * 3:]))
+        self.assertTrue(torch.all(layout.audio_update_mask[-10:]))
+
+    def test_hybrid_audio_memory_can_coexist_with_first_frame_without_visual_memory(self) -> None:
+        layout = build_hybrid_condition_layout(
+            text_length=4,
+            latent_frames=3,
+            latent_height=4,
+            latent_width=6,
+            audio_frames=5,
+            reference_shapes=(),
+            reference_audio_frames=(1, 1),
+            keyframe_indices=(0,),
+            output_frame_count=39,
+        )
+        condition = layout.segment("condition")
+        target_video = layout.segment("video")
+        self.assertTrue(torch.all(
+            layout.position_ids[condition.start:condition.stop, 0]
+            == layout.position_ids[target_video.start, 0]
+        ))
+        self.assertEqual(int((~layout.audio_update_mask).sum()), 4)
 
     def test_reference_audio_timestep_is_clean_and_target_audio_follows_own_clock(self) -> None:
         from h3serve.native_engine.model.dit import FullH3DiT

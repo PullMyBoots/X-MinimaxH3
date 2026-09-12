@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "purpose": "Isolate 720p15 Split-QKV plus single QKNorm/RoPE from parallel sparse LUT. Compare against the retained batch25 V22 control.",
+  "anchor": "720p15_seed82332_long_workshop.json",
+  "candidates": [
+    {
+      "version": "v22_long_split_single_no_parallel",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 4096,
+      "long_sequence_split_qkv_outputs": true,
+      "long_sequence_single_qknorm_rope": true,
+      "long_sequence_parallel_sparse_lut": false
+    }
+  ]
+}

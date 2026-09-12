@@ -7,15 +7,21 @@ python_bin="${PYTHON_BIN:-python3.10}"
 venv="${runtime_root}/venv"
 vendor_root="${runtime_root}/vendor"
 cuda_home="${CUDA_HOME:-/usr/local/cuda-13.3}"
+flashvsr_python_bin="${FLASHVSR_PYTHON_BIN:-python3.11}"
+flashvsr_venv="${runtime_root}/flashvsr-venv"
 
 minimax_commit="8d8824efaf94586c0cc9ac7ad8d0723d4d6420ea"
-lightx_commit="205d5c872d01557935dc87d67156f4f94069ea65"
+lightx_commit="231e2307f15b9eb60fe3f877f7eed945c8d8d717"
 sparge_commit="ae5b629ebb41e41f86b3ea2ab5a3283f13ac151a"
 sage_commit="eb615cf6cf4d221338033340ee2de1c37fbdba4a"
 
 command -v git >/dev/null || { echo "git is required" >&2; exit 1; }
 command -v "${python_bin}" >/dev/null || {
   echo "Python 3.10 is required (override with PYTHON_BIN)" >&2
+  exit 1
+}
+command -v "${flashvsr_python_bin}" >/dev/null || {
+  echo "Python 3.11 is required for temporal second sampling (override with FLASHVSR_PYTHON_BIN)" >&2
   exit 1
 }
 [[ -x "${cuda_home}/bin/nvcc" ]] || {
@@ -83,6 +89,25 @@ CUDA_HOME="${cuda_home}" PATH="${cuda_home}/bin:${PATH}" \
   "${python}" -m pip install --no-build-isolation --no-deps \
     "${vendor_root}/SpargeAttn"
 "${python}" -m pip freeze > "${runtime_root}/installed-packages.txt"
+
+# Temporal second sampling runs in an isolated process because FlashVSR's
+# pinned Torch 2.6/CUDA 12.4 extension is not ABI-compatible with H3's
+# Torch 2.13/CUDA 13.0 runtime. The model stays hot in CPU RAM and only owns
+# the GPU while a temporal second-sampling job is running.
+"${flashvsr_python_bin}" -m venv "${flashvsr_venv}"
+flashvsr_python="${flashvsr_venv}/bin/python"
+"${flashvsr_python}" -m pip install --upgrade pip setuptools wheel packaging ninja
+"${flashvsr_python}" -m pip install \
+  --index-url https://download.pytorch.org/whl/cu124 \
+  torch==2.6.0+cu124 torchvision==0.21.0+cu124 torchaudio==2.6.0+cu124
+"${flashvsr_python}" -m pip install -r "${release_root}/requirements-flashvsr.lock"
+block_sparse_wheel="${release_root}/wheels/block_sparse_attn-0.0.2-cp311-cp311-linux_x86_64.whl"
+[[ -f "${block_sparse_wheel}" ]] || {
+  echo "Missing pinned FlashVSR CUDA wheel: ${block_sparse_wheel}" >&2
+  exit 1
+}
+"${flashvsr_python}" -m pip install --no-deps "${block_sparse_wheel}"
+"${flashvsr_python}" -m pip freeze > "${runtime_root}/flashvsr-installed-packages.txt"
 
 echo "Installation complete. Run:"
 echo "  ${python} ${release_root}/scripts/preflight.py"

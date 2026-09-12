@@ -1,0 +1,69 @@
+.history-section-title > div:first-child > span {
+  display: block;
+  margin-top: 4px;
+}
+
+.history-bulk-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.history-bulk-tools #historySelectionCount {
+  min-width: 72px;
+  text-align: right;
+}
+
+.history-bulk-tools button:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}
+
+.manager-job.selectable {
+  position: relative;
+  padding-left: 48px;
+}
+
+.manager-job.selected {
+  border-color: rgba(255, 134, 89, .58);
+  background: linear-gradient(145deg, rgba(255, 134, 89, .09), rgba(7, 9, 14, .55));
+}
+
+.job-select {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  cursor: pointer;
+}
+
+.job-select input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--orange);
+  cursor: pointer;
+}
+
+@media (max-width: 800px) {
+  .history-section-title {
+    align-items: flex-start;
+    gap: 12px;
+    flex-direction: column;
+  }
+
+  .history-bulk-tools {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .history-bulk-tools #historySelectionCount {
+    margin-right: auto;
+    text-align: left;
+  }
+}

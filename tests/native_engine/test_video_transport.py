@@ -17,6 +17,23 @@ class VideoTransportTests(unittest.TestCase):
             10,
         )
 
+    def test_720p15_streams_when_runtime_cuda_headroom_is_too_small(self):
+        from h3serve.native_engine.adapters.real_vae import (
+            select_uint8_postprocess_frame_chunk,
+        )
+
+        shape = (1, 3, 362, 736, 1280)
+        # Geometry alone stays on the established single-tensor path.
+        self.assertIsNone(select_uint8_postprocess_frame_chunk(shape))
+        # A hard 16GB launcher can have less than the 3.81-GiB output tensor
+        # available after the Video-VAE and decoded clip are resident.
+        chunk = select_uint8_postprocess_frame_chunk(
+            shape, workspace_budget_bytes=2 * 1024**3
+        )
+        self.assertIsNotNone(chunk)
+        self.assertGreater(chunk, 0)
+        self.assertLess(chunk, shape[2])
+
     def test_streaming_uint8_transform_is_byte_exact(self):
         import torch
 

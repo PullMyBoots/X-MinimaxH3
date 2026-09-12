@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "purpose": "Four-step end-to-end engineering gate for the request-layout-driven 1080p 16:9 x 15s path. This is not a quality comparator.",
+  "scenarios": [
+    {
+      "name": "v19_round229_accel75_1080p15_seed82303_e2e4",
+      "seed": 82303,
+      "width": 1920,
+      "height": 1088,
+      "frames": 362,
+      "steps": 4,
+      "prompt": "integrated_multimodal_description: [Shot 1]\n写实电影质感的海边灯塔内部，暴风雨夜晚，单一连续长镜头。女维修工程师从旋转楼梯快速跑到控制台，推上总电闸并说：<d>[Chinese] 主灯恢复了！</d> 男无线电员随即走向窗边观察海面并回答：<d>[Chinese] 船队已经看见信号！</d> 两个人物身份、面孔、服装与空间关系稳定，动作连贯，镜头平稳跟随，不得切镜，不得出现第三个人物、字幕、标题或额外人声。 overall_soundscape: 暴雨、海浪、金属楼梯脚步、电闸机械声、灯塔电机启动声，两句清晰中文对白及自然室内混响。 non_diegetic_music: N/A",
+      "offload_mode": "block",
+      "mlp_chunk_tokens": 8192,
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 8192,
+      "prefetch_depth": 1,
+      "resident_block_count": 0,
+      "vae_tile_size": 288,
+      "vae_tile_batch_size": 1
+    }
+  ]
+}

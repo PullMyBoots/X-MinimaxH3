@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "purpose": "Quality-bearing 1080p 16:9 x 15s x 20-step gate. Prompt semantics are Human evaluation content and are not scheduler inputs.",
+  "scenarios": [
+    {
+      "name": "lighthouse_dialogue_action_quality20_seed82303",
+      "seed": 82303,
+      "width": 1920,
+      "height": 1088,
+      "frames": 362,
+      "steps": 20,
+      "prompt": "integrated_multimodal_description: [Shot 1]\n写实电影质感的海边灯塔内部，暴风雨夜晚，15.083秒单一连续长镜头。全片只有同一名女维修工程师（S1）和同一名男无线电员（S2），两人的面孔、年龄、服装、音色及空间方位始终一致，不得切镜。\n\n0至5秒，摄影机从旋转楼梯下方向上平稳跟随。S1快速但自然地跑上湿润的金属台阶，一只手连续扶着栏杆，脚掌与每级台阶接触清楚；S2留在上层控制台旁观察仪表。S1跑到控制台后先停稳，再伸手握住总电闸。\n\n5至10秒，S1用连续有力的动作把总电闸向上推到底，电闸发出清楚的机械咔哒声，主灯随后逐渐点亮。她看向S2并自然地说：<d>[Chinese] 主灯恢复了！</d> 说话时只有S1张嘴，嘴部清晰，口型与语音同步，语速自然。\n\n10至15.083秒，S2听完后才离开控制台走向窗边，双手扶住窗框观察海面，远处船只收到旋转光束。他转头回答：<d>[Chinese] 船队已经看见信号！</d> 说话时只有S2张嘴，S1保持沉默并检查仪表。人物行走、扶栏、推闸、扶窗和转头动作必须连续，不得瞬移、粘连、肢体变形或交换身份。\n\noverall_soundscape: 与画面同步的暴雨、海浪、金属楼梯脚步、电闸机械声、灯塔电机逐渐启动声，两句清晰自然的中文对白及稳定的室内混响；不得出现第三个人声、对白倒带、爆音或额外旁白。\n\nnon_diegetic_music: N/A",
+      "offload_mode": "block",
+      "mlp_chunk_tokens": 8192,
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 8192,
+      "prefetch_depth": 1,
+      "resident_block_count": 0,
+      "vae_tile_size": 288,
+      "vae_tile_batch_size": 1
+    }
+  ]
+}

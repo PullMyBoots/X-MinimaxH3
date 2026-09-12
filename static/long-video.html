@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>长视频窗口编辑器 · H3</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f5f6f8;color:#182631;max-width:1200px;margin:24px auto;padding:0 20px;line-height:1.65}a{color:#155d97}section{background:white;border:1px solid #dde3e8;border-radius:12px;padding:20px;margin:18px 0}.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}label{display:block}input,select,textarea,button{font:inherit;box-sizing:border-box}input[type=number],select{width:100%;padding:8px}input[type=range]{width:100%}textarea{width:100%;font:14px/1.5 monospace;padding:12px;tab-size:2}button{padding:9px 16px;margin:5px 8px 5px 0;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f6f8;padding:15px;font-size:13px}small{display:block;color:#53616d}video{max-width:100%;max-height:600px}.error{color:#a52626}#status{white-space:pre-wrap}.resolution-control{grid-column:span 2}.resolution-head{display:flex;justify-content:space-between}.resolution-stops{display:grid;grid-template-columns:repeat(6,1fr);gap:4px}.resolution-stops button{min-width:0;margin:0;padding:4px 2px;border:1px solid #d8dfe5;border-radius:6px;background:#fff;color:#65727c;font-size:11px}.resolution-stops button.active{border-color:#155d97;background:#eaf4fb;color:#155d97;font-weight:700}@media(max-width:700px){.controls{grid-template-columns:1fr}.resolution-control{grid-column:auto}}
+</style>
+<header><a href="/">← 主控制台</a><h1>长视频窗口编辑器</h1><p>全片共同设定 → 分镜与声音 → 时间段。一个时间段对应一次窗口推理。请先在主控制台选择并载入模型。</p></header>
+<form id="editor">
+<section><h2>窗口与记忆</h2><div class="controls">
+<label>重叠时长（秒）<input id="overlap" type="number" min="0.25" max="4" step="0.001" value="1.625" required><small>前一窗口携带的上下文；预览显示帧网格对齐后的实际值。</small></label>
+<label>单窗口最大时长（秒）<input id="maximum" type="number" min="5" max="15" step="0.1" value="15" required><small>包括重叠部分。超过容量会指出具体时间段。</small></label>
+<label>长期记忆容量 <output id="memoryValue">60</output><input id="memory" type="range" min="0" max="100" step="1" value="60"><small>0 关闭自动长期记忆；更大保留更多参考，实际容量在预览中显示。</small></label>
+</div></section>
+<section><h2>提示词模板</h2><p>人物、物体和场景在 entities 中只定义不随时间变化的身份与外观，使用 <code>{{标识}}</code> 引用。initial_state 保存初始位置和持有关系；每个时间段用带起止时间的 beats 提交 state_updates，编译器按顺序生成下一窗口的权威状态。camera_style 只写镜头不变量，每个时间段的 camera 只写本窗口机位与运动。需要回到此前的相同机位时，新分镜可用 <code>camera_anchor</code> 指向此前的 <code>shot_id</code> 与 <code>segment_id</code>。</p>
+<button type="button" data-example="cafe30">载入咖啡店模板</button><button type="button" data-example="theater30">载入剧院一镜到底模板</button>
+<label for="story">结构化故事 JSON</label><textarea id="story" rows="23" spellcheck="false" required></textarea>
+<small>这里只编辑 story；上方三个控件独立提交。beat 和对白的 start_seconds/end_seconds 都从新增内容的 0 秒起计时；编译器自动添加重叠偏移。切镜后至少预留 0.5 秒建立画面，同一分镜后续时间段只延续上一窗口的相机终态。</small></section>
+<section><h2>生成参数与素材</h2><div class="controls">
+<label>模型版本<select id="variant"><option value="lora">LoRA</option><option value="base">Base</option></select><small>使用主控制台当前载入的 FL2VA / Ref2VA 服务。</small></label>
+<div class="resolution-control"><div class="resolution-head"><label for="resolutionSlider">分辨率</label><output id="resolutionValue">480P</output></div><input id="resolutionSlider" type="range" min="0" max="5" step="1" value="1"><input id="resolution" type="hidden" value="480p"><div class="resolution-stops"><button type="button" data-resolution="360p">360P</button><button type="button" data-resolution="480p">480P</button><button type="button" data-resolution="540p">540P</button><button type="button" data-resolution="720p">720P</button><button type="button" data-resolution="900p">900P</button><button type="button" data-resolution="1080p">1080P</button></div></div>
+<label>比例<select id="ratio"><option selected>16:9</option><option>9:16</option><option>1:1</option><option>4:3</option><option>3:4</option></select></label>
+<label>采样步数<input id="steps" type="number" min="4" max="30" value="7" required></label>
+<label>加速力度<input id="acceleration" type="number" min="0" max="100" value="0" required></label>
+<label>种子<input id="seed" type="text" value="94001" required></label>
+</div><details><summary>参考素材与访问密钥</summary>
+<p>FL2VA 可选首尾帧；Ref2VA 使用参考图片与声音，并要求在实体定义中以 <code>&lt;Picture N&gt;</code> / <code>&lt;Audio N&gt;</code> 明确引用每个上传素材。当前窗口接口不接收参考视频。</p>
+<label>首帧（FL2VA）<input id="first" type="file" accept="image/*"></label>
+<label>尾帧（FL2VA）<input id="last" type="file" accept="image/*"></label>
+<label>参考图片（Ref2VA，最多 9 张）<input id="pictures" type="file" accept="image/*" multiple></label>
+<label>参考音频（Ref2VA，最多 3 段）<input id="audios" type="file" accept="audio/*" multiple></label>
+<label>API Key（服务启用时填写，不保存）<input id="apiKey" type="password" autocomplete="off"></label>
+</details></section>
+<button id="previewButton" type="button">检查并预览逐窗提示词</button><button id="generateButton" type="submit">校验并生成视频</button>
+</form>
+<p id="status" role="status" aria-live="polite"></p><div id="preview"></div><section id="result" hidden><h2>生成结果</h2><video id="video" controls></video><p><a id="download">打开视频</a> · <a id="jobLink">任务记录</a></p></section>
+<script src="/static/long-video.js" defer></script>
+</html>

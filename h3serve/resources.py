@@ -7,9 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .memory_policy import detect_host_memory
-
-
 def _read_cpu_counters() -> tuple[int, int]:
     fields = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()
     values = [int(value) for value in fields[1:]]
@@ -22,15 +19,31 @@ def _read_memory() -> dict[str, float]:
     for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
         key, raw = line.split(":", 1)
         values[key] = int(raw.strip().split()[0]) * 1024
-    status = detect_host_memory()
-    total = int(status.effective_limit_gib * 2**30)
-    available = int(status.available_gib * 2**30)
+    # /proc/meminfo describes the Linux/WSL host as a whole even when this
+    # service lives inside a smaller cgroup.  The cgroup-scoped H3 value is
+    # reported separately as `service_memory` by the API layer.
+    total = values.get("MemTotal", 0)
+    free = values.get("MemFree", 0)
+    available = values.get("MemAvailable", values.get("MemFree", 0))
     used = max(0, total - available)
+    # Keep the conventional Linux pressure-oriented `used_gib` for API
+    # compatibility, but also expose physical occupancy.  A service cgroup's
+    # memory.current includes charged file cache, whereas MemAvailable treats
+    # reclaimable cache as available.  Comparing those two values directly can
+    # otherwise make a child cgroup appear larger than the whole host.
+    occupied = max(0, total - free)
+    reclaimable = max(0, available - free)
     return {
         "used_gib": round(used / 2**30, 2),
+        "occupied_gib": round(occupied / 2**30, 2),
         "total_gib": round(total / 2**30, 2),
+        "free_gib": round(free / 2**30, 2),
+        "available_gib": round(available / 2**30, 2),
+        "reclaimable_gib": round(reclaimable / 2**30, 2),
         "percent": round(used * 100 / total, 1) if total else 0.0,
-        "physical_total_gib": round(status.physical_total_gib, 2),
+        "occupied_percent": round(occupied * 100 / total, 1) if total else 0.0,
+        "physical_total_gib": round(total / 2**30, 2),
+        "scope": "linux_host",
     }
 
 

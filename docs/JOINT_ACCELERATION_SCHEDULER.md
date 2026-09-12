@@ -123,7 +123,7 @@ v3 仍不证明 Human 全局最优，原因有三：风险表只有少量 Human 
 运行：
 
 ```bash
-cd .
+cd subprojects-main/main/release/serve
 PYTHONDONTWRITEBYTECODE=1 python -m scripts.evaluate_joint_scheduler \
   --output runtime/calibration/joint_scheduler_evaluation/v3_round2_cpu.json
 ```

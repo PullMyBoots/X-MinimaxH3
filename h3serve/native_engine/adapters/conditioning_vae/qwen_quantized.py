@@ -23,6 +23,7 @@ import torch
 import torch.nn.functional as F
 from safetensors import safe_open
 
+from ...local_checkpoint_cache import drop_file_page_cache
 from ...runtime.pinned_pool import pack_pinned_tensors
 from .preprocess import prepare_keyframes
 
@@ -773,6 +774,14 @@ class PackedQwen3VLT2AVConditioner:
         # Small slabs keep the rolling two-layer window close to the logical
         # ~262 MiB per layer rather than rounding it to two 256 MiB slabs.
         packed = pack_pinned_tensors(sources, slab_bytes=32 * 1024**2)
+        # ``pack_pinned_tensors`` has copied every byte needed by the CUDA
+        # consumer.  The source shard will not be reused during this encode,
+        # so retaining its clean mmap pages only makes a 16/32 GiB host look
+        # full and forces unrelated model pages through reclaim later.  Drop
+        # each execution-ordered shard immediately; the two-layer pinned
+        # rolling window remains available for read/compute overlap.
+        del sources
+        drop_file_page_cache(path)
         return _PinnedLayer(
             tensors=dict(zip(keys, packed.tensors)),
             slabs=packed.slabs,
@@ -880,8 +889,6 @@ class PackedQwen3VLT2AVConditioner:
             # Do not let its ~15GB clean page cache compete with long-video
             # host scratch after encoding; the next miss can reread the fast
             # native-disk copy while exact prompt/reference hits bypass Qwen.
-            from ...local_checkpoint_cache import drop_file_page_cache
-
             drop_file_page_cache(self.checkpoint)
         torch.cuda.synchronize(self.device)
         elapsed = time.perf_counter() - started

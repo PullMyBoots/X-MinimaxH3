@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "purpose": "Same-process 720p15 V22 exact execution A/B on the established long-workshop Human gate.",
+  "anchor": "720p15_seed82332_long_workshop.json",
+  "candidates": [
+    {
+      "version": "v22_long_control",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": null,
+      "long_sequence_projection_chunk_tokens": 8192,
+      "long_sequence_split_qkv_outputs": false,
+      "long_sequence_single_qknorm_rope": false,
+      "long_sequence_parallel_sparse_lut": false
+    },
+    {
+      "version": "v22_long_exact_q32768_p4096",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 4096,
+      "long_sequence_split_qkv_outputs": true,
+      "long_sequence_single_qknorm_rope": true,
+      "long_sequence_parallel_sparse_lut": true
+    }
+  ]
+}

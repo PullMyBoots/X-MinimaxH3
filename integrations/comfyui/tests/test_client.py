@@ -45,6 +45,16 @@ class NativeDurationBudgetTest(unittest.TestCase):
         self.assertEqual(_max_native_duration(1440, 1088), 243 / 24)
         self.assertEqual(_max_native_duration(1088, 1088), 328 / 24)
 
+    def test_generation_nodes_expose_transparent_long_horizon_but_checkpoint_stays_native(self):
+        preset = H3ServeFL2VAPresetGenerate.INPUT_TYPES()["required"]
+        advanced = H3ServeAdvancedGenerate.INPUT_TYPES()["required"]
+        english = H3ServeFL2VAPresetGenerateEnglish.INPUT_TYPES()["required"]
+        checkpoint = H3ServeFL2VACheckpointSubmit.INPUT_TYPES()["required"]
+        self.assertEqual(preset["duration_seconds"][1]["max"], 60.0)
+        self.assertEqual(advanced["duration_seconds"][1]["max"], 60.0)
+        self.assertEqual(english["duration_seconds"][1]["max"], 60.0)
+        self.assertEqual(checkpoint["duration_seconds"][1]["max"], 15.0)
+
 
 class Handler(BaseHTTPRequestHandler):
     requests = []
@@ -243,14 +253,12 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(schema["sampling_steps"][1]["default"], 8)
         self.assertEqual(schema["acceleration"][1]["default"], 0.0)
         self.assertNotIn("提示词增强", schema)
-        self.assertNotIn("mimo_api_key", schema)
         self.assertNotIn("background_music", schema)
         self.assertNotIn("参考图片分辨率", schema)
         self.assertNotIn("参考视频分辨率", schema)
         fl2va = H3ServeFL2VAPresetGenerate.INPUT_TYPES()["required"]
         self.assertNotIn("background_music", fl2va)
         self.assertNotIn("提示词增强", fl2va)
-        self.assertNotIn("mimo_api_key", fl2va)
         self.assertNotIn("参考图片分辨率", fl2va)
         self.assertNotIn("参考视频分辨率", fl2va)
         self.assertTrue(fl2va["prompt"][1]["forceInput"])
@@ -365,7 +373,7 @@ class ClientTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertNotIn('maxlength="6000" required aria-label="SHOT', app_source)
 
-    def test_ref2va_prompt_is_forwarded_without_mimo_or_soundtrack_rewrite(self):
+    def test_ref2va_prompt_is_forwarded_without_soundtrack_rewrite(self):
         prompt = "  subject_definitions:\n<Subject 1> from <Picture 1>.\n  "
         with patch("h3serve_connector.nodes._run", return_value=("ok",)) as run:
             H3ServeRef2VAPresetGenerate().generate(

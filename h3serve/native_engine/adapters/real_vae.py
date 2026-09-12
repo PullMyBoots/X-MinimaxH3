@@ -19,6 +19,7 @@ from .vae_compile import enable_feed_forward_compile
 
 VIDEO_UINT8_STREAMING_MIN_FP32_BYTES = 4 * 1024**3
 VIDEO_UINT8_STREAMING_WORKING_SET_BYTES = 256 * 1024**2
+VIDEO_UINT8_RUNTIME_HEADROOM_GUARD_BYTES = 512 * 1024**2
 
 
 class _TemporalUint8HostSink:
@@ -98,6 +99,8 @@ class _TemporalUint8HostSink:
 
 def select_uint8_postprocess_frame_chunk(
     shape: tuple[int, int, int, int, int],
+    *,
+    workspace_budget_bytes: int | None = None,
 ) -> int | None:
     """Select a geometry-only temporal chunk for exact uint8 transport.
 
@@ -112,12 +115,61 @@ def select_uint8_postprocess_frame_chunk(
         raise ValueError("decoded video shape must be positive NCTHW")
     batch, channels, frames, height, width = map(int, shape)
     full_fp32_bytes = batch * channels * frames * height * width * 4
-    if full_fp32_bytes <= VIDEO_UINT8_STREAMING_MIN_FP32_BYTES:
+    if workspace_budget_bytes is not None and workspace_budget_bytes < 0:
+        raise ValueError("postprocess workspace budget cannot be negative")
+    budget_requires_streaming = (
+        workspace_budget_bytes is not None
+        and full_fp32_bytes > int(workspace_budget_bytes)
+    )
+    if (
+        full_fp32_bytes <= VIDEO_UINT8_STREAMING_MIN_FP32_BYTES
+        and not budget_requires_streaming
+    ):
         return None
     one_frame_bytes = batch * channels * height * width * 4
     return max(
         1,
         min(frames, VIDEO_UINT8_STREAMING_WORKING_SET_BYTES // one_frame_bytes),
+    )
+
+
+def _cuda_postprocess_workspace_budget(
+    decoded: Any,
+    *,
+    allocator_ceiling_bytes: int | None = None,
+) -> int | None:
+    """Return safe live CUDA headroom under the launcher's hard ceiling.
+
+    The 16GB launcher is commonly exercised on a physical 24GB development
+    GPU.  Physical free memory therefore cannot decide admission: PyTorch's
+    per-process fraction is the authoritative product ceiling.  Use reserved
+    bytes because a fragmented allocator cannot promise that nominally free
+    physical memory is reusable by the next full-frame allocation.
+    """
+
+    import torch
+
+    if getattr(decoded, "device", None) is None or decoded.device.type != "cuda":
+        return None
+    device = decoded.device
+    try:
+        if allocator_ceiling_bytes is None:
+            total = int(torch.cuda.get_device_properties(device).total_memory)
+            fraction = float(torch.cuda.get_per_process_memory_fraction(device))
+            ceiling = int(total * fraction)
+        else:
+            ceiling = int(allocator_ceiling_bytes)
+            if ceiling <= 0:
+                raise ValueError("CUDA allocator ceiling must be positive")
+        committed = max(
+            int(torch.cuda.memory_allocated(device)),
+            int(torch.cuda.memory_reserved(device)),
+        )
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return None
+    return max(
+        0,
+        ceiling - committed - VIDEO_UINT8_RUNTIME_HEADROOM_GUARD_BYTES,
     )
 
 
@@ -193,7 +245,10 @@ def load_native_video_vae(
     # of the service even though model.load_state_dict already copied weights.
     latent_mean = state.pop("latents_mean").clone()
     latent_std = state.pop("latents_std").clone()
-    model.load_state_dict(state, strict=True)
+    # Bind checkpoint tensors directly instead of copying a second complete
+    # VAE into anonymous host memory.  Safetensors storage stays clean and
+    # reclaimable under a cgroup limit; model numerics are unchanged.
+    model.load_state_dict(state, strict=True, assign=True)
     del state
     install_bounded_tile_batching(model, tile_batch_size)
     if compile_feed_forward:
@@ -214,6 +269,7 @@ def decode_native_video(
     *,
     output_dtype: str = "float32",
     temporal_host_chunk_frames: int | None = None,
+    cuda_allocator_ceiling_bytes: int | None = None,
 ):
     import torch
 
@@ -268,10 +324,19 @@ def decode_native_video(
         if decoded is not sink.output:
             raise RuntimeError("H3 temporal decoder did not consume the host sink")
         return decoded
-    return postprocess_native_video(decoded, output_dtype=output_dtype)
+    return postprocess_native_video(
+        decoded,
+        output_dtype=output_dtype,
+        cuda_allocator_ceiling_bytes=cuda_allocator_ceiling_bytes,
+    )
 
 
-def postprocess_native_video(decoded: Any, *, output_dtype: str = "float32"):
+def postprocess_native_video(
+    decoded: Any,
+    *,
+    output_dtype: str = "float32",
+    cuda_allocator_ceiling_bytes: int | None = None,
+):
     """Apply the checkpoint pixel transform and copy the result to the host.
 
     ``uint8`` is an exact transport optimization for the production MP4 path:
@@ -288,7 +353,13 @@ def postprocess_native_video(decoded: Any, *, output_dtype: str = "float32"):
     pixel_mean = decoded.new_tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1, 1)
     pixel_std = decoded.new_tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1, 1)
     if output_dtype == "uint8":
-        frame_chunk = select_uint8_postprocess_frame_chunk(tuple(decoded.shape))
+        frame_chunk = select_uint8_postprocess_frame_chunk(
+            tuple(decoded.shape),
+            workspace_budget_bytes=_cuda_postprocess_workspace_budget(
+                decoded,
+                allocator_ceiling_bytes=cuda_allocator_ceiling_bytes,
+            ),
+        )
         if frame_chunk is not None:
             output = torch.empty(
                 tuple(decoded.shape), dtype=torch.uint8, device="cpu"
@@ -363,7 +434,10 @@ def load_native_audio_vae(
     state = load_file(str(checkpoint))
     latent_mean = state.pop("latents_mean")
     latent_std = state.pop("latents_std")
-    model.load_state_dict(state, strict=True)
+    # Preserve file-backed checkpoint storage.  Low-RAM W4A8 profiles can
+    # reclaim cold audio-VAE pages while DiT is active instead of retaining a
+    # duplicate anonymous allocation for the entire service lifetime.
+    model.load_state_dict(state, strict=True, assign=True)
     del state
     model.latents_mean.copy_(latent_mean)
     model.latents_std.copy_(latent_std)
@@ -378,4 +452,5 @@ __all__ = [
     "select_uint8_postprocess_frame_chunk",
     "VIDEO_UINT8_STREAMING_MIN_FP32_BYTES",
     "VIDEO_UINT8_STREAMING_WORKING_SET_BYTES",
+    "VIDEO_UINT8_RUNTIME_HEADROOM_GUARD_BYTES",
 ]

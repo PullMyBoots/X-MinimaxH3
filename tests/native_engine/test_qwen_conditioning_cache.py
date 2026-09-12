@@ -5,6 +5,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import torch
 
@@ -137,6 +138,42 @@ class QwenConditioningCacheTests(unittest.TestCase):
         self.assertTrue(torch.equal(
             upgraded["qwen_conditioning_cache"]["prompt_embeds"], embeds
         ))
+
+    def test_internal_bridge_moves_persisted_tensors_to_runtime_device(self) -> None:
+        embeds = torch.arange(3 * 5120, dtype=torch.float32).view(1, 3, 5120)
+        tags = torch.tensor([1, 0, 1], dtype=torch.long)
+        source = self.root / "bridge.pt"
+        torch.save(
+            {
+                "qwen_conditioning_cache": {
+                    "schema_version": QWEN_CONDITIONING_CACHE_SCHEMA_VERSION,
+                    "fingerprint": "preceding-window-condition",
+                    "encoder": self.session._conditioning_encoder_identity(),
+                    "prompt_embeds": embeds,
+                    "text_token_tags": tags,
+                }
+            },
+            source,
+        )
+        # Intercept the CUDA move so this remains runnable on CPU-only CI. The
+        # production failure this guards was a host tensor reaching a CUDA
+        # ``condition_proj`` only for the second long-video window.
+        self.session.runtime_config = replace(
+            RuntimeConfig.cpu_test(), device="cuda:0"
+        )
+        original_to = torch.Tensor.to
+        requested_cuda_moves: list[str] = []
+
+        def observe_to(tensor, *args, **kwargs):
+            destination = args[0] if args else kwargs.get("device")
+            if str(destination) == "cuda:0":
+                requested_cuda_moves.append(str(destination))
+                return tensor
+            return original_to(tensor, *args, **kwargs)
+
+        with mock.patch.object(torch.Tensor, "to", observe_to):
+            self.session._load_internal_conditioning_bridge(source)
+        self.assertEqual(requested_cuda_moves, ["cuda:0", "cuda:0"])
 
     def test_ref_images_and_audio_are_static_across_target_geometry(self) -> None:
         self.session.engine = "reference"

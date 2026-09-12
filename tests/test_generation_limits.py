@@ -75,11 +75,12 @@ class GenerationLimitPolicyTest(unittest.TestCase):
             migrated = load_generation_limit_policy(data_dir)
             self.assertEqual(migrated, GenerationLimitPolicy())
 
-    def test_pre_2k_matrix_preserves_operator_values_and_seeds_only_2k(self) -> None:
+    def test_legacy_matrix_preserves_operator_values_and_seeds_new_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary)
             limits = default_preset_limits()
-            del limits["2k"]
+            for resolution in ("540p", "900p", "2k"):
+                del limits[resolution]
             limits["1080p"]["16:9"] = 10
             path = data_dir / "settings/generation_limits.json"
             path.parent.mkdir(parents=True)
@@ -89,6 +90,8 @@ class GenerationLimitPolicyTest(unittest.TestCase):
 
             migrated = load_generation_limit_policy(data_dir)
             self.assertEqual(migrated.preset_limits["1080p"]["16:9"], 10)
+            self.assertEqual(migrated.preset_limits["540p"]["16:9"], 15)
+            self.assertEqual(migrated.preset_limits["900p"]["16:9"], 15)
             self.assertEqual(migrated.preset_limits["2k"]["16:9"], 15)
 
 

@@ -1,11 +1,11 @@
 """Native planning primitives adapted from MMH3 UltimateUpscale.
 
 The upstream ComfyUI node always exposes temporal/spatial pieces directly.
-H3 Serve first asks a more important deployment question: can the complete
-target AV latent use the existing full-context low-VRAM execution graph?  If
-yes, one full-canvas second pass is both cheaper and more coherent.  Tiling is
-introduced only when the same physical VRAM admission model rejects the full
-target.
+H3 Serve first asks whether the target lies inside the model's calibrated
+native temporal horizon and can use the full-context low-VRAM execution graph.
+If yes, one full-canvas second pass is both cheaper and more coherent.  Longer
+sequences are temporally bounded before memory admission; spatial tiling is
+introduced only when a bounded full-spatial piece still cannot fit.
 
 This module contains no ComfyUI dependency and no prompt/scene heuristics.
 Every decision is a function of target geometry, H3's latent grids and the
@@ -26,6 +26,16 @@ from .resource_backends import ResourceBackendId, WeightTier
 H3_FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 H3_AUDIO_TOKENS_PER_FRAME = 5.0 / 3.0
 H3_SPATIAL_COMPRESSION = 16
+H3_NATIVE_MAX_FRAMES = 362
+H3_TEMPORAL_OVERLAP_FRAMES = 17
+# Keep an automatic long-horizon piece inside the model's native 15-second
+# context even after both ends are snapped independently to the five-token
+# H3 VAE phase grid.  362 - 2 * 17 = 328; real snapped pieces are <= 340
+# frames, while a requested 362-frame moving window can grow beyond the
+# calibrated native horizon.
+H3_AUTO_LONG_WINDOW_FRAMES = (
+    H3_NATIVE_MAX_FRAMES - 2 * H3_TEMPORAL_OVERLAP_FRAMES
+)
 
 
 def frames_for_video_tokens(tokens: int) -> int:
@@ -360,6 +370,7 @@ def plan_ultimate_upscale(
     resource_profile: ResourceBackendId | None = None,
     allow_spatial_tiles: bool = False,
     temporal_window_frames: int | None = None,
+    temporal_overlap_frames: int | None = None,
 ) -> UltimateUpscalePlan:
     """Prefer a zero-redundancy full canvas, else search bounded pieces.
 
@@ -393,6 +404,11 @@ def plan_ultimate_upscale(
         if temporal_window_frames is None
         else min(frames, max(1, int(temporal_window_frames)))
     )
+    requested_overlap = (
+        None
+        if temporal_overlap_frames is None
+        else max(0, int(temporal_overlap_frames))
+    )
     # The outer orchestrator has not run Qwen yet and only owns a conservative
     # prompt-length estimate.  On hard 8-GiB W4, a mathematically fitting
     # 153-frame piece left ~120 MiB and was then correctly rejected by the
@@ -414,12 +430,26 @@ def plan_ultimate_upscale(
     requires_throughput_windows = bool(
         target_width * target_height > 1920 * 1088 and frames > 141
     )
+    # The estimator is a useful admission signal inside the native training
+    # horizon, but it is not allowed to authorize a super-native Attention
+    # sequence.  A measured 1280x736x1076 second pass was estimated to fit and
+    # then OOMed in DiT block 4 with ~21.67 GiB already allocated.  Bound every
+    # automatic >15-second pass before considering the estimate, and retain
+    # enough phase-snap margin that each actual piece remains <=362 frames.
+    requires_long_horizon_windows = frames > H3_NATIVE_MAX_FRAMES
+    automatic_window_frames = (
+        136
+        if requires_throughput_windows
+        else H3_AUTO_LONG_WINDOW_FRAMES
+        if requires_long_horizon_windows
+        else None
+    )
     explicit_full_context = bool(
         requested_window is not None and requested_window >= frames
     )
     if full_decision.fits_budget and (
         explicit_full_context
-        or (requested_window is None and not requires_throughput_windows)
+        or (requested_window is None and automatic_window_frames is None)
     ):
         temporal = temporal_pieces(
             full_features.latent_frames,
@@ -459,7 +489,12 @@ def plan_ultimate_upscale(
         time = temporal_pieces(
             full_features.latent_frames,
             chunk_frames=requested_window,
-            overlap_frames=min(17, requested_window - 1),
+            overlap_frames=min(
+                H3_TEMPORAL_OVERLAP_FRAMES
+                if requested_overlap is None
+                else requested_overlap,
+                requested_window - 1,
+            ),
         )
         maximum_piece = max(
             time,
@@ -510,6 +545,7 @@ def plan_ultimate_upscale(
                     **piece_decision.telemetry(),
                     "admission_reason": "user_temporal_window",
                     "requested_temporal_window_frames": requested_window,
+                    "requested_temporal_overlap_frames": requested_overlap,
                 },
                 temporal=time,
                 spatial=spatial,
@@ -518,17 +554,22 @@ def plan_ultimate_upscale(
                 redundancy_ratio=sampled / source_work,
             )
 
-    if requires_throughput_windows and requested_window is None:
-        # Use the upstream author's native 136-frame / 17-frame-overlap
-        # operating point and keep the complete spatial canvas.  This turns
-        # the dominant quadratic Attention term into three much shorter
-        # sequences without paying spatial-tile seams or duplicated borders.
+    if automatic_window_frames is not None and requested_window is None:
+        # Keep the complete spatial canvas and route automatic long sequences
+        # through a bounded temporal executor.  2K-class workloads retain the
+        # upstream 136/17 throughput operating point; lower resolutions use a
+        # larger 328-frame target whose phase-snapped pieces remain inside the
+        # native 362-frame context.  This avoids spatial seams while bounding
+        # both Attention complexity and VRAM independently of total duration.
         time = temporal_pieces(
             full_features.latent_frames,
-            chunk_frames=136,
-            overlap_frames=17,
+            chunk_frames=automatic_window_frames,
+            overlap_frames=H3_TEMPORAL_OVERLAP_FRAMES,
         )
-        maximum_piece = max(time, key=lambda piece: piece.video_token_stop - piece.video_token_start)
+        maximum_piece = max(
+            time,
+            key=lambda piece: piece.video_token_stop - piece.video_token_start,
+        )
         maximum_frames = maximum_piece.frames
         piece_features = analyzer.analyze(
             width=target_width,
@@ -573,7 +614,13 @@ def plan_ultimate_upscale(
                 full_canvas=False,
                 memory_execution={
                     **piece_decision.telemetry(),
-                    "admission_reason": "2k_long_pcie_thrash_guard",
+                    "admission_reason": (
+                        "2k_long_pcie_thrash_guard"
+                        if requires_throughput_windows
+                        else "native_horizon_guard"
+                    ),
+                    "automatic_temporal_window_frames": automatic_window_frames,
+                    "native_max_frames": H3_NATIVE_MAX_FRAMES,
                     "full_canvas_estimate": full_decision.telemetry(),
                 },
                 temporal=time,
@@ -592,8 +639,15 @@ def plan_ultimate_upscale(
         if allow_spatial_tiles
         else (max(target_width, target_height),)
     )
-    maximum_chunk_frames = (
-        frames if requested_window is None else min(frames, requested_window)
+    # Never let the fallback search undo an automatic safety guard merely
+    # because the same optimistic full-context estimator reports a fit.
+    maximum_chunk_frames = min(
+        frames,
+        requested_window
+        if requested_window is not None
+        else automatic_window_frames
+        if automatic_window_frames is not None
+        else frames,
     )
     chunk_frames = tuple(
         chunk

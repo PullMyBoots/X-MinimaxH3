@@ -168,6 +168,35 @@ def run() -> None:
     assert torch.equal(first_sa[1], second_sa[1])
     assert torch.isfinite(first_sa[0]).all() and torch.isfinite(first_sa[1]).all()
 
+    forecast_flags = []
+    forecast_sa_plan = SamplingPlan(
+        sampler="sa_solver",
+        video_sigmas=strong_sigmas,
+        audio_sigmas=strong_sigmas,
+        actual_step_indices=(0, 1, 3),
+        video_shift=6.0,
+        audio_shift=3.0,
+        seed=82303,
+    )
+
+    def forecast_contract_predict(
+        video, audio, clock, *, step_index, is_actual_step
+    ):
+        forecast_flags.append((step_index, is_actual_step))
+        return AVPrediction(
+            torch.full_like(video, 0.25), torch.full_like(audio, -0.125)
+        )
+
+    forecast_sa = SASolverAVSampler().sample(
+        first["video_latents"].clone(),
+        first["audio_latents"].clone(),
+        forecast_sa_plan,
+        forecast_contract_predict,
+    )
+    assert forecast_flags == [(0, True), (1, True), (2, False), (3, True)]
+    assert torch.isfinite(forecast_sa[0]).all()
+    assert torch.isfinite(forecast_sa[1]).all()
+
     # A persisted prefix followed by the untouched sigma suffix must be
     # numerically identical to one uninterrupted RES run.  The predictor uses
     # the global step index so this also guards the resume offset contract.
@@ -242,6 +271,15 @@ def run() -> None:
     assert np.isfinite(normalized).all()
     loud = normalize_h3_audio_loudness(waveform * 4.0)
     assert float(loud.std(ddof=1)) < float((waveform * 4.0).std(ddof=1))
+    sparse_peak = waveform.copy()
+    sparse_peak[0, sample_rate // 4] = 1.8
+    peak_safe = normalize_h3_audio_loudness(sparse_peak)
+    assert float(np.max(np.abs(peak_safe))) <= 0.900001
+    assert np.allclose(
+        peak_safe / peak_safe[0, sample_rate // 4],
+        sparse_peak / sparse_peak[0, sample_rate // 4],
+        atol=1e-6,
+    )
 
     with tempfile.TemporaryDirectory(prefix="h3-native-mux-") as directory:
         root = Path(directory)
@@ -259,6 +297,11 @@ def run() -> None:
         assert (probe.width, probe.height) == (width, height)
         assert probe.audio_channels == 2
         assert probe.audio_sample_rate == sample_rate
+        assert (
+            result["encoder"]["audio_normalization"]["policy"]
+            == "std5_peak0p9_shape_preserving_v2"
+        )
+        assert result["encoder"]["audio_normalization"]["hard_clipped_samples"] == 0
         assert not list(root.glob("*.tmp.mp4"))
 
         cancelled_destination = root / "cancelled.mp4"

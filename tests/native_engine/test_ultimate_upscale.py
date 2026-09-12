@@ -94,6 +94,7 @@ class UltimateUpscaleNativePlanningTests(unittest.TestCase):
             text_tokens=512,
             condition_count=0,
             temporal_window_frames=119,
+            temporal_overlap_frames=39,
         )
         self.assertFalse(plan.full_canvas)
         self.assertEqual(len(plan.spatial), 1)
@@ -105,6 +106,44 @@ class UltimateUpscaleNativePlanningTests(unittest.TestCase):
         self.assertEqual(
             plan.memory_execution["requested_temporal_window_frames"], 119
         )
+        self.assertEqual(
+            plan.memory_execution["requested_temporal_overlap_frames"], 39
+        )
+
+    def test_24gib_720p45_auto_stays_inside_native_temporal_horizon(self) -> None:
+        plan = plan_ultimate_upscale(
+            target_width=1280,
+            target_height=736,
+            frames=1076,
+            device_budget_bytes=23 * 1024**3,
+            text_tokens=512,
+            condition_count=0,
+            actual_evaluations=2,
+        )
+        self.assertFalse(plan.full_canvas)
+        self.assertEqual(len(plan.temporal), 4)
+        self.assertEqual(len(plan.spatial), 1)
+        self.assertLessEqual(max(piece.frames for piece in plan.temporal), 362)
+        self.assertEqual(
+            plan.memory_execution["admission_reason"], "native_horizon_guard"
+        )
+        self.assertEqual(
+            plan.memory_execution["automatic_temporal_window_frames"], 328
+        )
+
+    def test_720p45_fallback_cannot_re_admit_full_duration(self) -> None:
+        plan = plan_ultimate_upscale(
+            target_width=1280,
+            target_height=736,
+            frames=1076,
+            device_budget_bytes=10 * 1024**3,
+            text_tokens=512,
+            condition_count=0,
+            actual_evaluations=2,
+        )
+        self.assertFalse(plan.full_canvas)
+        self.assertGreater(len(plan.temporal), 1)
+        self.assertLessEqual(max(piece.frames for piece in plan.temporal), 362)
 
     def test_user_full_context_can_override_throughput_window(self) -> None:
         plan = plan_ultimate_upscale(

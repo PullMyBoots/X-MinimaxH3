@@ -29,20 +29,20 @@ class UpscaleError(RuntimeError):
 
 
 class RetiredFlashVSRUpscaler:
-    """No-op compatibility surface after H3 second sampling replaced FlashVSR.
+    """Unavailable-method surface when the optional temporal runtime is absent.
 
-    Older persisted jobs still deserialize their historical upscale metadata,
-    but a normal service process no longer imports model weights, starts a
-    daemon, or claims CPU/GPU resources for the retired post-processor.
+    The historical class name is retained for import compatibility. New
+    installations normally construct :class:`FlashVSRUpscaler`; this object is
+    used only when its interpreter, source, or weights have not been installed.
     """
 
     def status(self) -> dict[str, Any]:
         return {
             "ready": False,
-            "implementation": "retired_flashvsr_replaced_by_h3_second_sampling",
-            "resident_state": "removed",
+            "implementation": "temporal_second_sampling_unavailable",
+            "resident_state": "unavailable",
             "missing": [],
-            "replacement": "POST /api/v1/jobs/{job_id}/second-sampling",
+            "remediation": "run scripts/install.sh and scripts/download_models.py",
             "last_error": None,
         }
 
@@ -57,8 +57,8 @@ class RetiredFlashVSRUpscaler:
 
     async def upscale(self, *_args: Any, **_kwargs: Any) -> UpscaleResult:
         raise UpscaleError(
-            "FlashVSR has been replaced by native H3 second sampling; "
-            "submit it from the completed source job"
+            "temporal second sampling is unavailable; install the isolated "
+            "FlashVSR runtime and model weights"
         )
 
 
@@ -70,6 +70,7 @@ class UpscaleResult:
     height: int
     peak_allocated_mib: float | None = None
     peak_reserved_mib: float | None = None
+    timings: dict[str, float] | None = None
 
 
 class FlashVSRUpscaler:
@@ -259,12 +260,18 @@ class FlashVSRUpscaler:
         target_height: int,
         cancel_event: asyncio.Event,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        output_path: Path | None = None,
     ) -> UpscaleResult:
         source = source.resolve()
-        temporary = source.with_name(f".{source.stem}.upscaling.mp4")
-        final = source.with_name(
-            f"{source.stem}_flashvsr_{target_width}x{target_height}.mp4"
+        final = (
+            output_path.resolve()
+            if output_path is not None
+            else source.with_name(
+                f"{source.stem}_flashvsr_{target_width}x{target_height}.mp4"
+            )
         )
+        final.parent.mkdir(parents=True, exist_ok=True)
+        temporary = final.with_name(f".{final.stem}.upscaling.mp4")
         temporary.unlink(missing_ok=True)
         async with self._request_lock:
             started = time.perf_counter()
@@ -319,6 +326,10 @@ class FlashVSRUpscaler:
                     height=target_height,
                     peak_allocated_mib=float(response["peak_allocated_mib"]),
                     peak_reserved_mib=float(response["peak_reserved_mib"]),
+                    timings={
+                        str(name): float(seconds)
+                        for name, seconds in response.get("timings", {}).items()
+                    },
                 )
             except (BrokenPipeError, ConnectionError) as error:
                 await self._terminate()

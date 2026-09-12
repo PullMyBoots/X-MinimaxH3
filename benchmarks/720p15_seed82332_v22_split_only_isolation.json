@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "purpose": "Isolate 720p15 split-QKV from the single-sided QKNorm/RoPE launcher. Compare against retained batch25/batch26 outputs.",
+  "anchor": "720p15_seed82332_long_workshop.json",
+  "candidates": [
+    {
+      "version": "v22_long_split_only",
+      "actual_steps": [0, 1, 2, 3, 4, 8, 12, 15, 18, 19],
+      "long_sequence_query_chunk_tokens": 32768,
+      "long_sequence_projection_chunk_tokens": 4096,
+      "long_sequence_split_qkv_outputs": true,
+      "long_sequence_single_qknorm_rope": false,
+      "long_sequence_parallel_sparse_lut": false
+    }
+  ]
+}

@@ -73,10 +73,17 @@ not change numerical inference or performance.
   continue or discard that same job. Preview resolution and preview steps are
   configured globally in the 8090 console.
 
-The connector forwards the prompt as one unmodified `STRING`. It does not run
-MiMo, rewrite dialogue, append soundtrack instructions or compile storyboards.
-Write the complete H3 prompt, including `integrated_multimodal_description`,
-`overall_soundscape` and `non_diegetic_music`, when those fields are needed.
+Generation duration accepts 1–60 seconds. Requests above the physical native
+window are transparently executed as protected joint audio/video latent
+continuations. Ordinary H3 `[Shot N] At MM:SS` timestamps and plain time ranges
+are localized by the service; there is no separate long-video workflow and no
+decode between windows. Intermediate checkpoint previews are currently
+unavailable above 15 seconds, so keep `preview_mode=Off` for long requests.
+
+The connector forwards the prompt as one unmodified `STRING`; it does not rewrite
+dialogue, append soundtrack instructions, or compile storyboards. Write the complete
+H3 prompt, including `integrated_multimodal_description`, `overall_soundscape`, and
+`non_diegetic_music`, when those fields are needed.
 
 ## FL2VA and Ref2VA inputs
 

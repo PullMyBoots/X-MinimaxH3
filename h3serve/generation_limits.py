@@ -122,12 +122,14 @@ def load_generation_limit_policy(data_dir: Path) -> GenerationLimitPolicy:
             raise ValueError("settings document must be an object")
         # Migrate the short-lived mode/manual_vram_gib format to defaults.
         limits = document.get("preset_limits")
-        # 2K native generation was added after the original editable matrix.
-        # Preserve every operator-tuned legacy row and only seed the newly
-        # introduced row; malformed fields in existing rows still fail closed.
-        if isinstance(limits, dict) and "2k" not in limits:
+        # New preset stops may be added after an operator has tuned the matrix.
+        # Preserve every existing row and seed only the newly introduced rows;
+        # malformed fields in existing rows still fail closed.
+        if isinstance(limits, dict) and any(key not in limits for key in RESOLUTIONS):
             limits = dict(limits)
-            limits["2k"] = default_preset_limits()["2k"]
+            defaults = default_preset_limits()
+            for resolution in RESOLUTIONS:
+                limits.setdefault(resolution, defaults[resolution])
         return GenerationLimitPolicy(limits) if limits is not None else GenerationLimitPolicy()
     except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
         return GenerationLimitPolicy()

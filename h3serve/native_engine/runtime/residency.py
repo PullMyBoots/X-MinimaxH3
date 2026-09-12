@@ -114,6 +114,11 @@ class ImmutablePinnedModuleResidency:
         self._pinned_master_indices: set[int] = set()
         self._prepared = False
         self._copy_streams: dict[str, Any] = {}
+        # ``current_device`` alone cannot distinguish two Block-offload
+        # partitions on the same CUDA device.  Keep the exact host-prefix
+        # signature so consecutive long-video windows can reuse the resident
+        # shell without allocating a second copy of it before rebinding.
+        self._partition_signature: tuple[str, tuple[str, ...]] | None = None
         self.estimated_device_bytes = (
             int(estimated_device_bytes)
             if estimated_device_bytes is not None
@@ -327,6 +332,7 @@ class ImmutablePinnedModuleResidency:
         self._bind(self._host_masters)
         self._prepared = True
         self.current_device = "cpu"
+        self._partition_signature = None
 
     def _bind(self, tensors: list[Any]) -> None:
         torch = import_module("torch")
@@ -401,6 +407,27 @@ class ImmutablePinnedModuleResidency:
         if not self._prepared:
             self.prepare_host()
 
+        partition_signature = (device, prefixes)
+        if (
+            self.current_device == f"partitioned:{device}"
+            and self._partition_signature == partition_signature
+        ):
+            # The previous latent-only window deliberately retained this
+            # exact DiT partition.  Re-copying it transiently owns both the old
+            # and new CUDA weights and can exhaust a 24-GiB WDDM device before
+            # the second window starts.
+            return
+
+        if self.current_device != "cpu":
+            # A genuinely different partition must evict first.  Rebinding to
+            # immutable host masters drops every old device tensor before any
+            # replacement allocation is issued.
+            self._bind(self._host_masters)
+            self.current_device = "cpu"
+            self._partition_signature = None
+            torch = import_module("torch")
+            torch.cuda.empty_cache()
+
         usages: dict[int, set[bool]] = {}
         for slot in self._slots:
             usages.setdefault(slot.master_index, set()).add(
@@ -439,6 +466,7 @@ class ImmutablePinnedModuleResidency:
         torch.cuda.current_stream(target).wait_event(ready)
         self._bind(bound_tensors)
         self.current_device = f"partitioned:{device}"
+        self._partition_signature = partition_signature
 
     def move_to(self, device: str, *, non_blocking: bool) -> None:
         del non_blocking  # Transfers are batched on the adapter's copy stream.
@@ -449,9 +477,16 @@ class ImmutablePinnedModuleResidency:
         if device == "cpu":
             self._bind(self._host_masters)
             self.current_device = "cpu"
+            self._partition_signature = None
             return
         if not device.startswith("cuda:"):
             raise ValueError("immutable module residency supports only CPU and CUDA")
+        if self.current_device != "cpu":
+            self._bind(self._host_masters)
+            self.current_device = "cpu"
+            self._partition_signature = None
+            torch = import_module("torch")
+            torch.cuda.empty_cache()
         self._move_to_cuda(device)
         self.current_device = device
 

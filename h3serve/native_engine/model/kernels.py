@@ -2506,6 +2506,14 @@ def _write_compact_value_fp8(
     head_dim = int(value.shape[2])
     if value_absmax.shape != (heads, head_dim):
         raise ValueError("compact V absmax must use [heads,head_dim]")
+    # ``torch.split`` over the fused [K|V] projection retains the original
+    # 2*inner_width row stride, so the V view is normally non-contiguous even
+    # though each logical slab is compact.  Materialize only this bounded
+    # projection slab (at most ``projection_chunk_tokens`` rows) before the
+    # Triton writer.  Requiring the caller to make the entire K/V context
+    # contiguous would defeat the long-sequence memory contract.
+    if not value.is_contiguous():
+        value = value.contiguous()
     from .compact_fp8 import write_sage_fp8_slab
 
     write_sage_fp8_slab(

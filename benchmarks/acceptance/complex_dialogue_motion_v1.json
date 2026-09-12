@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "complex_dialogue_motion_v1",
+  "task": {
+    "width": 864,
+    "height": 480,
+    "frames": 243,
+    "fps": 24,
+    "duration_seconds": 10.125,
+    "seed": 82301,
+    "prompt": "A realistic cinematic historical drama inside a medieval stone gatehouse at night, exactly two recurring characters: a female commander in a dark red cloak and a rain-soaked male scout in a gray hood. Maintain their faces, clothing and voices consistently; use one continuous shot with no cuts. 0.0-3.0 seconds: the commander runs in from the far left, crosses the room to a wooden map table, forcefully places her metal helmet on the table, looks directly at the scout and clearly says in Mandarin, ‘城门快守不住了！’ Her lips move only during her line; the scout listens silently. 3.0-6.5 seconds: the scout turns away, strides across the room, pulls the heavy wooden door shut with both hands, returns to the map and points toward the north alley while clearly replying in Mandarin, ‘带伤员从北巷撤离！’ His lips move only during his line; the commander remains silent and watches him. 6.5-10.125 seconds: exactly three distant bell strikes sound; the commander grabs a burning torch, climbs two stone steps toward the narrow window, raises the torch above her shoulder, turns back toward the scout and clearly says in Mandarin, ‘我留下，等援军进城。’ The camera tracks right to follow her large movement and ends with both characters visible. Natural forceful acting, continuous body motion, stable identities, realistic rain and firelight, accurate lip synchronization. Stereo audio: distinct female and male voices, rain outside, helmet impact, heavy door slam, exactly three bell strikes, armor movement and room ambience. No narrator, no extra dialogue, no subtitles, no captions, no on-screen text, no additional people.",
+    "expected_dialogue": [
+      {
+        "order": 1,
+        "speaker_role": "female_commander",
+        "text": "城门快守不住了",
+        "window_seconds": [0.0, 3.0]
+      },
+      {
+        "order": 2,
+        "speaker_role": "male_scout",
+        "text": "带伤员从北巷撤离",
+        "window_seconds": [3.0, 6.5]
+      },
+      {
+        "order": 3,
+        "speaker_role": "female_commander",
+        "text": "我留下等援军进城",
+        "window_seconds": [6.5, 10.125]
+      }
+    ],
+    "visual_sample_seconds": [0.75, 2.5, 3.75, 5.75, 7.25, 9.5]
+  },
+  "acceptance": {
+    "primary": [
+      "whisper_dialogue_content_order_and_timestamps",
+      "four_to_eight_frame_visual_sanity",
+      "hot_latency_and_peak_memory"
+    ],
+    "diagnostic_only": [
+      "ssim",
+      "audio_waveform_or_embedding_difference"
+    ],
+    "human_review": [
+      "speaker_identity",
+      "lip_sync",
+      "motion_instruction_adherence",
+      "overall_audio_visual_quality"
+    ]
+  }
+}

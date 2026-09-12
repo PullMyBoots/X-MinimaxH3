@@ -82,36 +82,6 @@
       "profile": "turbo"
     },
     {
-      "role": "lightx2v_fl2va_8step_lora",
-      "repo": "lightx2v/Minimax-h3-Turbo",
-      "revision": "05ef678438e84933c406131b59abbf86919b3aac",
-      "filename": "minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
-      "install_path": "loras/lightx2v/minimax_h3_fl2v_turbo_8step_v1.0_768p_bf16.safetensors",
-      "bytes": 1383677808,
-      "sha256": "9b0efe3613b43a84e30febaa43af27432ea9d0711eac7bba904b2556b175f6d4",
-      "profile": "fl2va"
-    },
-    {
-      "role": "lightx2v_fl2va_4step_lora",
-      "repo": "lightx2v/Minimax-h3-Turbo",
-      "revision": "05ef678438e84933c406131b59abbf86919b3aac",
-      "filename": "minimax_h3_fl2v_turbo_4step_v1.1_768p_bf16.safetensors",
-      "install_path": "loras/lightx2v/minimax_h3_fl2v_turbo_4step_v1.1_768p_bf16.safetensors",
-      "bytes": 1383677808,
-      "sha256": "b5e25a59292d51bca3fc02b9a0b2284e11b4eb20921a9c5adc2db785956b8966",
-      "profile": "fl2va"
-    },
-    {
-      "role": "lightx2v_ref2va_4step_lora",
-      "repo": "lightx2v/Minimax-h3-Turbo",
-      "revision": "05ef678438e84933c406131b59abbf86919b3aac",
-      "filename": "minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
-      "install_path": "loras/lightx2v/minimax_h3_ref2v_turbo_4step_v0.1_bf16.safetensors",
-      "bytes": 1383677768,
-      "sha256": "9e642fc8749c74f8da5e2382877ab5c7aa37b9a73b7fd0d6d457bd1b3cb1ae99",
-      "profile": "ref2va"
-    },
-    {
       "role": "latent_upscaler",
       "repo": "LBH-123-AI/Minimax_h3_latent_Upscaler",
       "revision": "09592c6221ec95cc8e0fae67842e34926c4e668b",
@@ -120,6 +90,47 @@
       "bytes": 690592992,
       "sha256": "4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6",
       "profile": "both"
+    },
+    {
+      "role": "temporal_second_sampling_dit",
+      "repo": "JunhaoZhuang/FlashVSR-v1.1",
+      "revision": "63a588528f1e25de6c3ebd5fdade4481dce2bbf1",
+      "filename": "diffusion_pytorch_model_streaming_dmd.safetensors",
+      "install_path": "upscalers/flashvsr-v1.1/diffusion_pytorch_model_streaming_dmd.safetensors",
+      "bytes": 5676070392,
+      "sha256": "bd28180edcf3446c028e32fc6b731a80bf7e4da2ab4caac3186b9499964d37be",
+      "profile": "temporal"
+    },
+    {
+      "role": "temporal_second_sampling_lq_projection",
+      "repo": "JunhaoZhuang/FlashVSR-v1.1",
+      "revision": "63a588528f1e25de6c3ebd5fdade4481dce2bbf1",
+      "filename": "LQ_proj_in.ckpt",
+      "install_path": "upscalers/flashvsr-v1.1/LQ_proj_in.ckpt",
+      "bytes": 575694948,
+      "sha256": "d6d011cdaaba6a52645086caa08fa04124e746f6ca568140a24007591142bfd2",
+      "profile": "temporal"
+    },
+    {
+      "role": "temporal_second_sampling_decoder",
+      "repo": "JunhaoZhuang/FlashVSR-v1.1",
+      "revision": "63a588528f1e25de6c3ebd5fdade4481dce2bbf1",
+      "filename": "TCDecoder.ckpt",
+      "install_path": "upscalers/flashvsr-v1.1/TCDecoder.ckpt",
+      "bytes": 189018333,
+      "sha256": "e224bdcf2f52745cbf4d393ff5374c2ba09e90285d5d19062d2bf63b915b6161",
+      "profile": "temporal"
+    },
+    {
+      "role": "temporal_second_sampling_prompt",
+      "repo": "OpenImagingLab/FlashVSR",
+      "revision": "b527c6f285fb30df530f5febc8b45764a789c961",
+      "filename": "examples/WanVSR/prompt_tensor/posi_prompt.pth",
+      "url": "https://raw.githubusercontent.com/OpenImagingLab/FlashVSR/b527c6f285fb30df530f5febc8b45764a789c961/examples/WanVSR/prompt_tensor/posi_prompt.pth",
+      "install_path": "upscalers/flashvsr-v1.1/posi_prompt.pth",
+      "bytes": 4195504,
+      "sha256": "4601107a11e4e11a936a6b79df579e54dbc99872132bf542151f0ffd65b4b1ef",
+      "profile": "temporal"
     }
   ]
 }

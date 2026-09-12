@@ -53,6 +53,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--timeout-seconds", type=float, default=1800.0)
+    parser.add_argument(
+        "--complete-resolution",
+        choices=("360p", "480p", "720p", "1080p"),
+        default="360p",
+        help="geometry used by the complete generation stages",
+    )
+    parser.add_argument(
+        "--complete-duration-seconds",
+        type=float,
+        default=1.0,
+        help="requested duration used by the complete generation stages",
+    )
+    parser.add_argument("--base-steps", type=int, default=5)
+    parser.add_argument("--lora-steps", type=int, default=4)
+    parser.add_argument("--acceleration", type=float, default=95.0)
     parser.add_argument("--skip-lora", action="store_true")
     parser.add_argument("--skip-second-sampling", action="store_true")
     parser.add_argument(
@@ -107,6 +122,12 @@ async def submit_generation(
     launcher: str,
     variant: str,
     reference_image: Path,
+    *,
+    resolution: str,
+    duration_seconds: float,
+    base_steps: int,
+    lora_steps: int,
+    acceleration: float,
 ) -> dict:
     definition = LAUNCHER_DEFINITIONS[launcher]
     fields = {
@@ -116,12 +137,12 @@ async def submit_generation(
             else PROMPT
         ),
         "seed": "20260828",
-        "resolution": "360p",
+        "resolution": resolution,
         "aspect_ratio": "16:9",
-        "duration_seconds": "1",
+        "duration_seconds": str(duration_seconds),
         "model_variant": variant,
-        "sampling_steps": "4" if variant == "lora" else "5",
-        "acceleration": "95",
+        "sampling_steps": str(lora_steps if variant == "lora" else base_steps),
+        "acceleration": str(acceleration),
         "preview_mode": "off",
     }
     if definition.service_family == "reference":
@@ -217,10 +238,13 @@ async def main_async(args: argparse.Namespace) -> int:
         "schema_version": "h3_tiered_backend_gpu_matrix_v1",
         "base_url": args.base_url,
         "test_policy": {
-            "base_steps": 5,
-            "lora_steps": 4,
-            "acceleration": 95,
-            "complete_geometry": "360p_1s",
+            "base_steps": args.base_steps,
+            "lora_steps": args.lora_steps,
+            "acceleration": args.acceleration,
+            "complete_geometry": (
+                f"{args.complete_resolution}_"
+                f"{args.complete_duration_seconds:g}s"
+            ),
             "second_sampling_steps": 1,
             "second_sampling_target": args.second_sampling_target,
         },
@@ -278,6 +302,11 @@ async def main_async(args: argparse.Namespace) -> int:
                         launcher,
                         variant,
                         args.reference_image,
+                        resolution=args.complete_resolution,
+                        duration_seconds=args.complete_duration_seconds,
+                        base_steps=args.base_steps,
+                        lora_steps=args.lora_steps,
+                        acceleration=args.acceleration,
                     )
                     job = await wait_job(
                         session,
@@ -296,7 +325,12 @@ async def main_async(args: argparse.Namespace) -> int:
                             session,
                             args.base_url,
                             job,
-                            args.output_dir / f"{launcher}_{variant}_360p1s.mp4",
+                            args.output_dir
+                            / (
+                                f"{launcher}_{variant}_"
+                                f"{args.complete_resolution}_"
+                                f"{args.complete_duration_seconds:g}s.mp4"
+                            ),
                         )
                         if variant == "base":
                             source_job = job

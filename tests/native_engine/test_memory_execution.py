@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from h3serve.native_engine.planner import (
     H3WorkloadAnalyzer,
     select_memory_execution,
+    select_dense_safe_resident_blocks,
 )
 
 
@@ -39,7 +41,7 @@ class MemoryExecutionTests(unittest.TestCase):
         self.assertIsNone(decision.vae_temporal_tile)
         self.assertTrue(decision.fits_budget)
 
-    def test_16gib_720p15_uses_same_fast_exact_graph(self) -> None:
+    def test_16gib_720p15_keeps_fast_dit_and_streams_exact_vae(self) -> None:
         decision = select_memory_execution(
             self.features(1280, 736, 362),
             requested_mode="auto",
@@ -54,6 +56,14 @@ class MemoryExecutionTests(unittest.TestCase):
         self.assertFalse(decision.compact_kv)
         self.assertEqual(decision.resource_profile, "int8_16gb")
         self.assertLessEqual(decision.device_budget_bytes, int(15.25 * 1024**3))
+        self.assertIsNotNone(decision.vae_temporal_tile)
+        self.assertEqual(
+            decision.telemetry()["vae_output_strategy"], "host_temporal_exact"
+        )
+        self.assertGreater(
+            decision.estimated_vae_postprocess_peak_bytes,
+            decision.device_budget_bytes,
+        )
         self.assertTrue(decision.fits_budget)
 
     def test_legacy_modes_cannot_change_the_unified_plan(self) -> None:
@@ -132,6 +142,110 @@ class MemoryExecutionTests(unittest.TestCase):
         )
         self.assertFalse(receipt["bit_exact"])
 
+    def test_w4a8_24gb_residency_is_clamped_by_dense_actual_peak(self) -> None:
+        block_bytes = 218_768_128
+        cases = (
+            ((864, 480, 124), 49),
+            ((1280, 736, 362), 45),
+            ((1920, 1088, 362), 14),
+        )
+        for geometry, expected in cases:
+            with self.subTest(geometry=geometry):
+                features = self.features(*geometry)
+                decision = select_memory_execution(
+                    features,
+                    requested_mode="auto",
+                    device_budget_bytes=int(23.25 * 1024**3),
+                    weight_tier="w4a8",
+                    resource_profile="w4a8_24gb",
+                )
+                selected, capacity, dense_peak = (
+                    select_dense_safe_resident_blocks(
+                        features,
+                        decision,
+                        requested_blocks=49,
+                        block_bytes=block_bytes,
+                    )
+                )
+                self.assertEqual(selected, expected)
+                self.assertEqual(capacity, expected)
+                self.assertGreater(dense_peak, decision.estimated_dit_peak_bytes)
+
+    def test_dense_residency_capacity_does_not_depend_on_step_sparsity(self) -> None:
+        block_bytes = 218_768_128
+        capacities = []
+        for actual, forecast in ((1, 19), (9, 11), (20, 0)):
+            features = self.analyzer.analyze(
+                width=1280,
+                height=736,
+                frames=362,
+                text_tokens=512,
+                condition_count=0,
+                engine="original",
+                actual_evaluations=actual,
+                forecast_evaluations=forecast,
+            )
+            decision = select_memory_execution(
+                features,
+                requested_mode="auto",
+                device_budget_bytes=int(23.25 * 1024**3),
+                weight_tier="w4a8",
+                resource_profile="w4a8_24gb",
+            )
+            capacities.append(select_dense_safe_resident_blocks(
+                features,
+                decision,
+                requested_blocks=49,
+                block_bytes=block_bytes,
+            )[0])
+        self.assertEqual(capacities, [45, 45, 45])
+
+    def test_lora_long_window_reserves_final_sage_value_workspace(self) -> None:
+        features = self.analyzer.analyze(
+            width=1280,
+            height=736,
+            frames=209,
+            text_tokens=700,
+            condition_count=0,
+            engine="lora",
+            actual_evaluations=6,
+            forecast_evaluations=0,
+        )
+        decision = select_memory_execution(
+            features,
+            requested_mode="auto",
+            device_budget_bytes=int(23.238 * 1024**3),
+            weight_tier="w4a8",
+            resource_profile="w4a8_24gb",
+            include_vae=False,
+        )
+        # Current W4 + Turbo-LoRA maximum registered block size.  The
+        # allocator must leave four blocks' worth of room relative to the old
+        # all-49 residency path for SageAttention's terminal FP8-V workspace.
+        selected, capacity, _ = select_dense_safe_resident_blocks(
+            features,
+            decision,
+            requested_blocks=49,
+            block_bytes=245_805_824,
+        )
+        self.assertEqual(selected, 45)
+        self.assertEqual(capacity, 45)
+
+    def test_research_w4_capacity_can_measure_16gib_without_changing_backend(self) -> None:
+        with patch.dict(
+            "os.environ", {"H3_NATIVE_RESEARCH_W4_VRAM_GIB": "16"}
+        ):
+            decision = select_memory_execution(
+                self.features(1280, 736, 362),
+                requested_mode="auto",
+                device_budget_bytes=int(15.25 * 1024**3),
+                weight_tier="w4a8",
+                resource_profile="w4a8_8gb",
+            )
+        self.assertEqual(decision.resource_profile, "w4a8_8gb")
+        self.assertGreater(decision.device_budget_bytes, 8 * 1024**3)
+        self.assertEqual(decision.block_buffer_count, 2)
+
     def test_1080p15_keeps_copy_compute_overlap_on_16gib_boundary(self) -> None:
         decision = select_memory_execution(
             self.features(1920, 1088, 362),
@@ -162,6 +276,17 @@ class MemoryExecutionTests(unittest.TestCase):
         self.assertLess(host_peak, 9.0)
         self.assertGreaterEqual(materialized_peak, 16.95)
         self.assertLess(materialized_peak, 17.5)
+
+    def test_720p15_product_postprocess_peak_includes_second_fp32_clip(self) -> None:
+        from h3serve.native_engine.planner import (
+            estimate_vae_postprocess_peak_bytes,
+        )
+
+        peak_gib = estimate_vae_postprocess_peak_bytes(
+            self.features(1280, 736, 362)
+        ) / 1024**3
+        self.assertGreater(peak_gib, 16.0)
+        self.assertLess(peak_gib, 17.0)
 
     def test_compact_peak_model_tracks_real_block_plus_service_envelope(self) -> None:
         from h3serve.native_engine.planner import (

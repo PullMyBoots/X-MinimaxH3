@@ -453,7 +453,12 @@ class H3BlockStack(nn.Module):
         def run_block(index, buffer, hidden, inputs):
             _raise_if_block_cancelled()
             with attention_layer(index):
-                return buffer.module(hidden, **inputs)
+                try:
+                    return buffer.module(hidden, **inputs)
+                except torch.OutOfMemoryError as error:
+                    raise torch.OutOfMemoryError(
+                        f"H3 block {index} exceeded the active device budget: {error}"
+                    ) from error
 
         return self._block_executor.run(
             sources,

@@ -260,8 +260,10 @@ class SASolverAVSampler:
 
     The implementation follows the standard ``sa_solver`` operating point:
     predictor order 3, corrector order 4, PECE disabled, and stochasticity in
-    the 20%-80% flow-time interval.  H3 second sampling normally starts near
+    the 20%-80% flow-time interval. H3 second sampling normally starts near
     the low-noise boundary, so the common denoise=0.20 path is deterministic.
+    As with RES, the predictor may supply either an exact DiT x0 or a forecast
+    x0; both follow one solver contract and both remain in the Adams history.
     """
 
     name = "sa_solver"
@@ -299,11 +301,6 @@ class SASolverAVSampler:
             raise ValueError(
                 "SA-Solver second sampling does not support RES history or transitions"
             )
-        if tuple(plan.actual_step_indices) != tuple(
-            range(plan.step_index_offset, plan.step_index_offset + plan.step_count)
-        ):
-            raise ValueError("SA-Solver requires every refinement step to run the DiT")
-
         import torch
 
         sigmas = tuple(float(value) for value in plan.video_sigmas)
@@ -328,6 +325,7 @@ class SASolverAVSampler:
         generator.manual_seed(generator_seed & ((1 << 63) - 1))
         stochastic_start = _flow_percent_to_sigma(0.20, plan.video_shift)
         stochastic_stop = _flow_percent_to_sigma(0.80, plan.video_shift)
+        actual = frozenset(plan.actual_step_indices)
 
         for index in range(plan.step_count):
             cancel_check()
@@ -337,7 +335,7 @@ class SASolverAVSampler:
                 predicted_audio,
                 clock,
                 step_index=clock.index,
-                is_actual_step=True,
+                is_actual_step=clock.index in actual,
             )
             video_predictions.append(prediction.video_denoised)
             audio_predictions.append(prediction.audio_denoised)
@@ -505,7 +503,7 @@ class TurboAVSampler:
         initial_previous_video_sigma: float | None = None,
         initial_previous_audio_sigma: float | None = None,
     ) -> tuple[Any, Any]:
-        if transition is not None or any(
+        if any(
             value is not None
             for value in (
                 initial_previous_video,
@@ -515,7 +513,7 @@ class TurboAVSampler:
             )
         ):
             raise ValueError(
-                "Turbo sampler does not support RES history or state transitions"
+                "Turbo sampler does not support RES history"
             )
         for index in range(plan.step_count):
             cancel_check()
@@ -557,6 +555,15 @@ class TurboAVSampler:
                     clock.video_sigma_next, plan.video_shift, plan.audio_shift
                 )
                 audio = audio + (audio_sigma_next - audio_sigma) * audio_derivative
+            if transition is not None:
+                video, audio, _, _ = transition(
+                    global_index,
+                    clock,
+                    video,
+                    audio,
+                    None,
+                    None,
+                )
             if callback is not None:
                 callback(global_index, clock, video, audio)
         return video, audio

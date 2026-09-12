@@ -5,15 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>X-MinimaxH3</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260814-conversation-studio">
-  <link rel="stylesheet" href="/static/fixed-engine.css?v=20260816-two-family-preview">
+  <link rel="stylesheet" href="/static/fixed-engine.css?v=20260831-auto-resource-budget-v1">
   <link rel="stylesheet" href="/static/product-ui.css?v=20260828-release-i18n-r1">
-  <link rel="stylesheet" href="/static/storyboard.css?v=20260820-dual-prompt-editor">
-  <link rel="stylesheet" href="/static/memory-ui.css?v=20260828-lora-selector-r1">
+  <link rel="stylesheet" href="/static/bulk-history.css?v=20260831-bulk-history-delete-v1">
+  <link rel="stylesheet" href="/static/storyboard.css?v=20260909-freeform-only-v1">
+  <link rel="stylesheet" href="/static/memory-ui.css?v=20260912-settings-drawers-v1">
   <link rel="stylesheet" href="/static/conversation-ui.css?v=20260814-square-submit">
-  <link rel="stylesheet" href="/static/composer-controls.css?v=20260828-checkpoint-preview">
+  <link rel="stylesheet" href="/static/composer-controls.css?v=20260912-single-window-v1">
   <link rel="stylesheet" href="/static/workspace.css?v=20260820-workspace">
   <link rel="stylesheet" href="/static/engine-progress.css?v=20260827-engine-progress-v1">
   <link rel="stylesheet" href="/static/i18n.css?v=20260828-second-sampling-r1">
+  <link rel="stylesheet" href="/static/infinite-video.css?v=20260911-ref-files-duration-budget-v1">
   <style>.dropzone video{width:100%;height:100%;object-fit:cover;display:none}.dropzone.has-image video{display:block}</style>
 </head>
 <body>
@@ -21,8 +23,9 @@
   <header class="topbar product-topbar">
     <div class="brand"><div class="brand-mark">X</div><div><strong>X-MinimaxH3</strong><span id="brandSubtitle">4090 accelerated video generation</span></div></div>
     <nav class="workspace-tabs" aria-label="工作区" hidden>
-      <button data-page="create">创作台</button>
-      <button class="active" data-page="tasks">任务管理 <b id="navTaskCount">0</b></button>
+      <button data-page="create">单视频创作</button>
+      <button data-page="infinite">长视频创作</button>
+      <button class="active" data-page="tasks">任务中心 <b id="navTaskCount">0</b></button>
     </nav>
     <div class="topbar-actions">
       <div class="server-state"><i></i><span id="healthText">连接服务中</span></div>
@@ -57,7 +60,7 @@
         <div id="conversationFeed" class="conversation-feed" aria-live="polite"></div>
       </section>
         <form id="generationForm" class="conversation-composer panel">
-          <div class="composer-heading"><span><b>新建视频</b><small>编辑分镜、增强提示词并发送到当前引擎</small></span><button class="submit-button composer-submit" type="submit" title="发送生成任务" aria-label="发送生成任务" disabled>↑</button></div>
+          <div class="composer-heading"><span><b>新建视频</b><small>输入完整提示词并发送到当前引擎</small></span><button class="submit-button composer-submit" type="submit" title="发送生成任务" aria-label="发送生成任务" disabled>↑</button></div>
           <div id="formMessage" class="message" role="status" aria-live="polite" hidden></div>
           <section class="engine-banner" id="engineBanner" data-engine="original">
             <span class="engine-icon original" id="engineIcon">F</span>
@@ -82,87 +85,73 @@
           <section class="storyboard-section" aria-labelledby="storyboardTitle">
             <div class="storyboard-head prompt-workbench-head">
               <div><span class="eyebrow">PROMPT WORKBENCH</span><h2 id="storyboardTitle">提示词</h2></div>
-              <div class="prompt-mode-switch" role="tablist" aria-label="提示词输入方式"><button type="button" class="active" data-prompt-mode="structured">模块化</button><button type="button" data-prompt-mode="freeform">自由输入</button></div>
             </div>
-
-            <div id="structuredPromptEditor">
-              <div class="structured-prompt-meta"><span>官方结构与分镜编辑</span><span class="storyboard-duration"><small id="storyboardTimingHint">目标时长</small><strong id="storyboardTotal">5.0 秒</strong></span></div>
-            <section id="referencePromptBlock" class="prompt-block reference-prompt-block" hidden>
-              <header class="prompt-block-head"><span><i>01</i><b>参考对象</b><small>建立素材对象与保留规则</small></span><div><button type="button" id="undoReferenceEnhancement" class="toolbar-undo" hidden>撤销</button><button type="button" id="enhanceReferences" class="mimo-button"><span>✦</span> 润色参考对象</button></div></header>
-              <div class="reference-contract-grid">
-                <label class="prompt-field"><span>对象定义 · subject_definitions</span><textarea id="referenceDefinitions" rows="5" maxlength="12000" placeholder="写什么：定义目标视频中需要反复引用的人物、物体、场景或声音，以及它来自哪个素材。&#10;怎么写：建议使用英文；每个对象单独一行，使用 &lt;Subject N&gt;、&lt;Picture N&gt;、&lt;Video N&gt; 或 &lt;Audio N&gt;。&#10;示例：&lt;Subject 1&gt; is the young girl from &lt;Picture 1&gt;, preserving her face, hairstyle and clothing."></textarea><div class="reference-mention-menu" hidden></div></label>
-                <label class="prompt-field"><span>保留规则 · retention_analysis</span><textarea id="referenceRetention" rows="5" maxlength="12000" placeholder="写什么：说明每个参考对象在目标视频中保留、改变或借鉴到什么程度。&#10;怎么写：建议使用英文；每个标签单独一行，并选用 fully_preserved、partially_preserved、attribute_transfer 或 weak_reference。&#10;示例：&lt;Subject 1&gt; (appears throughout): fully_preserved - preserve identity, hairstyle and clothing."></textarea><div class="reference-mention-menu" hidden></div></label>
-              </div>
-              <div id="referenceEnhancementMessage" class="enhancement-message" hidden></div>
-            </section>
-
-            <section class="prompt-block visual-prompt-block">
-              <header class="prompt-block-head"><span><i>02</i><b>画面内容</b><small>总体摘要、画面连续性与分镜</small></span><div><button type="button" id="undoVisualEnhancement" class="toolbar-undo" hidden>撤销</button><button type="button" id="enhanceVisuals" class="mimo-button"><span>✦</span> 润色画面内容</button></div></header>
-              <div id="referenceVisualOverview" class="visual-overview" hidden>
-                <label class="prompt-field"><span>总体摘要 · summary</span><textarea id="referenceSummary" rows="3" maxlength="4000" placeholder="写什么：简要概括要生成什么视频，以及主要参考素材分别起什么作用。&#10;怎么写：建议使用英文；以 [reference generation]、[video editing] 等任务类型开头，只概括目标，不展开分镜细节。&#10;示例：[reference generation] Generate an 8-second scene in which &lt;Subject 1&gt; enters the room and speaks using &lt;Audio 1&gt; as the voice reference."></textarea><div class="reference-mention-menu" hidden></div></label>
-              </div>
-              <div class="storyboard-subhead"><b>分镜列表</b><div class="storyboard-head-actions"><button type="button" id="addShot" class="secondary-button">＋ 添加分镜</button></div></div>
-              <div id="shotList" class="shot-list"></div>
-              <div id="visualEnhancementMessage" class="enhancement-message" hidden></div>
-            </section>
-
-            <section class="prompt-block sound-prompt-block">
-              <header class="prompt-block-head"><span><i>03</i><b>声音设计</b><small>画面内声音与画外配乐</small></span><div><button type="button" id="undoSoundEnhancement" class="toolbar-undo" hidden>撤销</button><button type="button" id="enhanceSound" class="mimo-button"><span>✦</span> 润色声音设计</button></div></header>
-              <label class="prompt-field"><span>画面内声音 · overall_soundscape</span><textarea id="overallSoundscape" rows="3" maxlength="4000" placeholder="写什么：概括整个视频中真实存在于场景里的环境声和动作音效。&#10;怎么写：建议使用英文；写清声音来源，声音发生时应与画面动作对应；可以输入 @ 引用音频素材。&#10;示例：Quiet corridor ambience, approaching footsteps, restrained breathing, and subtle backpack-fabric friction."></textarea><div class="reference-mention-menu" hidden></div></label>
-              <div class="storyboard-music">
-                <div class="inline-tool-row"><span><b>画外背景音乐 · non_diegetic_music</b><small id="bgmStateText">关闭 · N/A</small></span><label class="compact-toggle" aria-label="背景音乐"><input id="bgmEnabled" type="checkbox"><i></i></label></div>
-                <label class="field compact-bgm-style" id="bgmStyleField" hidden><span>配乐描述或 @ 引用音频素材</span><textarea id="bgmStyle" rows="3" maxlength="1000" placeholder="写什么：描述只有观众能听见的画外配乐。&#10;怎么写：建议使用英文；说明风格、情绪、节奏和音量，也可以输入 @ 引用音频素材。&#10;示例：A restrained slow piano score, warm and melancholic, mixed quietly below the dialogue."></textarea><div class="reference-mention-menu" hidden></div></label>
-              </div>
-              <div id="soundEnhancementMessage" class="enhancement-message" hidden></div>
-            </section>
-            <input type="hidden" name="prompt" id="compiledPrompt" required>
-            <div id="enhancementMessage" class="enhancement-message" hidden></div>
-            <details class="compiled-prompt-preview"><summary>查看最终发送给 H3 的提示词</summary><pre id="compiledPromptPreview"></pre></details>
-            </div>
-
-            <div id="freeformPromptEditor" class="freeform-prompt-editor" hidden>
+            <div id="freeformPromptEditor" class="freeform-prompt-editor">
               <div class="freeform-writing-guide">
                 <b>撰写建议</b>
                 <p><strong>1. 参考关系</strong><span>仅多参考模式需要：说明 &lt;Subject N&gt; 来自哪个 &lt;Picture N&gt;、&lt;Video N&gt; 或 &lt;Audio N&gt;，以及需要保留什么。</span></p>
                 <p><strong>2. 画面内容</strong><span>按播放顺序写主体、环境、动作、台词、运镜和分镜时间。</span></p>
                 <p><strong>3. 声音设计</strong><span><code>overall_soundscape:</code> 场景内声音；<code>non_diegetic_music:</code> N/A 或具体配乐描述。</span></p>
               </div>
-              <textarea id="freeformPrompt" maxlength="30000" rows="16" placeholder="输入要直接发送给 H3 的完整提示词……"></textarea>
+              <label class="freeform-prompt-field"><span>完整提示词</span><textarea id="freeformPrompt" name="prompt" maxlength="30000" rows="16" required placeholder="输入要直接发送给 H3 的完整提示词……"></textarea></label>
               <div class="reference-mention-menu" hidden></div>
             </div>
           </section>
 
           <section id="basicControls" class="mode-panel active settings-drawers" aria-label="生成设置">
-            <details class="config-drawer" id="inferenceDrawer">
-              <summary><span class="drawer-title"><i>⚡</i><span><b>推理设置</b><small>模型、步数与统一显存加速后端</small></span></span><output id="inferenceSummary">原始权重 · 20步 · Dense</output></summary>
-              <div class="drawer-content">
-                <div class="settings-grid inference-settings-grid">
-                  <label class="compact-field"><span>推理路线</span><select name="model_variant"><option value="base" selected>INT8 原始权重</option><option value="lora">LoRA 极速</option></select></label>
-                  <label class="compact-field range-field"><span>总采样步数 <output id="samplingStepsValue">20 步</output></span><input name="sampling_steps" type="range" min="5" max="30" step="1" value="20" aria-label="总采样步数"><small id="samplingStepsHint">完整去噪轨迹</small></label>
-                  <label class="compact-field acceleration-field" id="accelerationAdvanced"><span>加速档位 <output id="accelerationValue">0 · Dense</output></span><input name="acceleration" type="range" min="0" max="100" step="1" value="0" aria-label="加速档位"><small id="accelerationSafety">0 为 Dense；数值越大，内部加速越强。</small></label>
-                </div>
-                <div class="checkpoint-console" id="checkpointConsole">
-                  <div class="inline-tool-row"><span><b>断点任务</b><small id="checkpointPreviewPolicySummary">预览：360P · 4步 LoRA</small></span><label class="compact-toggle" aria-label="启用断点任务"><input id="checkpointEnabled" type="checkbox"><i></i></label></div>
-                  <label class="compact-field range-field" id="checkpointStepField" hidden><span>断点位置 <output id="checkpointStepValue">第 10 / 20 步后停止</output></span><input id="checkpointStep" name="checkpoint_step" type="range" min="1" max="19" step="1" value="10" aria-label="断点位置"><small>预览后可从原任务继续，不会重复断点前的正式计算。</small></label>
-                </div>
-                <input name="execution_mode" type="hidden" value="complete">
-                <input name="checkpoint_retain" type="hidden" value="true">
-                <input name="checkpoint_preview" type="hidden" value="true">
-              </div>
-            </details>
-            <details class="config-drawer" id="videoSettingsDrawer">
-              <summary><span class="drawer-title"><i>▣</i><span><b>画面与输出</b><small>尺寸、比例与时长</small></span></span><output id="videoSettingsSummary">480P · 16:9</output></summary>
+            <details class="config-box" id="videoSettingsDrawer">
+              <summary class="config-box-head"><span class="drawer-title"><i>▣</i><span><b>画面与输出</b><small>分辨率、比例与时长</small></span></span><output id="videoSettingsSummary">480P · 16:9 · 5.0秒</output></summary>
               <div class="drawer-content">
                 <div class="settings-grid video-settings-grid">
-                  <label class="compact-field"><span>尺寸模式</span><select name="size_mode" id="sizeMode"><option value="preset" selected>常用分辨率</option><option value="custom">自定义尺寸</option></select></label>
-                  <label class="compact-field preset-size-field"><span>分辨率</span><select name="resolution" data-basic-param><option>360p</option><option selected>480p</option><option>720p</option><option>1080p</option></select></label>
+                  <div class="compact-field dual-step-field resolution-track-field" id="creationResolutionControl">
+                    <span><b>分辨率轨道</b><output id="creationResolutionValue">一采 480P · 二采 480P</output></span>
+                    <div class="dual-step-range dual-resolution-range" id="creationResolutionTrack" style="--first-step-percent:11.11%;--total-step-percent:11.11%">
+                      <i class="dual-step-rail"></i><i class="dual-step-total-fill"></i><i class="dual-step-first-fill"></i>
+                      <input id="creationResolutionSlider" class="total-step-slider" type="range" min="360" max="1440" step="1" value="480" aria-label="二次采样分辨率">
+                      <input id="firstPassResolutionSlider" class="first-step-slider" type="range" min="360" max="1440" step="1" value="480" aria-label="第一次采样分辨率">
+                    </div>
+                    <div class="dual-step-legend"><span class="first-pass-key">● 一次采样 <b id="firstPassResolutionValue">480P</b></span><span class="total-pass-key">● 二次采样 <b id="finalPassResolutionValue">480P</b></span></div>
+                    <input name="resolution" type="hidden" value="480p" data-basic-param>
+                    <input id="firstPassResolution" type="hidden" value="480p">
+                    <div class="resolution-stops" aria-label="常用分辨率驻点">
+                      <button type="button" data-resolution="360p">360P</button><button type="button" data-resolution="480p">480P</button><button type="button" data-resolution="540p">540P</button><button type="button" data-resolution="720p">720P</button><button type="button" data-resolution="900p">900P</button><button type="button" data-resolution="1080p">1080P</button><button type="button" data-resolution="1220p">1220P</button><button type="button" data-resolution="1440p">1440P</button>
+                    </div>
+                    <small id="firstPassResolutionHint">两个节点重合时全程使用同一分辨率，不执行 latent 放大。</small>
+                  </div>
                   <label class="compact-field preset-size-field"><span>画面比例</span><select name="aspect_ratio" data-basic-param><option>1:1</option><option>4:3</option><option>3:4</option><option selected>16:9</option><option>9:16</option></select></label>
-                  <label class="compact-field range-field" id="freeformDurationField" hidden><span>视频时长 <output id="freeformDurationValue">5.0 秒</output></span><input name="duration_seconds" type="range" min="1" max="15" step="0.5" value="5" data-basic-param><small>自由输入模式单独设置</small></label>
-                  <div class="custom-size-fields" id="customSizeFields" hidden>
-                    <label class="compact-field range-field"><span>宽度 <output id="customWidthValue">864 px</output></span><input name="width" type="range" min="192" max="2560" step="32" value="864" disabled></label>
-                    <label class="compact-field range-field"><span>高度 <output id="customHeightValue">480 px</output></span><input name="height" type="range" min="192" max="2560" step="32" value="480" disabled></label>
+                  <label class="compact-field range-field" id="freeformDurationField"><span>视频时长 <output id="freeformDurationValue">5.0 秒</output></span><input name="duration_seconds" type="range" min="1" max="15" step="0.5" value="5" data-basic-param><small id="durationControlHint">单次生成任务最多15秒；更长内容请使用长视频创作。</small></label>
+                </div>
+              </div>
+            </details>
+            <details class="config-box" id="inferenceDrawer">
+              <summary class="config-box-head"><span class="drawer-title"><i>⚡</i><span><b>推理参数</b><small>权重、双节点步数、加速与预览</small></span></span><output id="inferenceSummary">原始权重 · 一采18/总20步 · Dense</output></summary>
+              <div class="drawer-content">
+                <div class="settings-grid inference-settings-grid">
+                  <div class="compact-field inference-mode-card">
+                    <div class="inline-tool-row"><span><b>启用 LoRA 加速</b><small id="modelVariantSummary">关闭 · INT8 原始权重</small></span><label class="compact-toggle" aria-label="启用 LoRA 加速"><input id="loraAccelerationEnabled" type="checkbox"><i></i></label></div>
+                    <select name="model_variant" class="visually-hidden-control" tabindex="-1" aria-hidden="true"><option value="base" selected>INT8 原始权重</option><option value="lora">LoRA 极速</option></select>
+                    <div class="inline-tool-row preview-mode-row compact-runtime-switches">
+                      <div class="mini-feature-switch"><span><b>中途预览</b><small id="previewPolicySummary">关闭 · 0 步</small></span><label class="compact-toggle" aria-label="启用中途预览"><input id="previewEnabled" type="checkbox"><i></i></label></div>
+                      <div class="mini-feature-switch" id="singleSecondSamplingWindowControl"><span><b>二采分窗</b><small id="singleSecondSamplingWindowSummary">关闭</small></span><label class="compact-toggle" aria-label="启用二次采样分窗"><input id="singleSecondSamplingWindowEnabled" type="checkbox"><i></i></label></div>
+                      <label class="inline-sigma-field" id="singleSecondSamplingSigmaField" hidden><span>Sigma <output id="singleSecondSamplingSigmaValue">1.00</output></span><input id="singleSecondSamplingSigmaScale" type="range" min="0.25" max="1" step="0.05" value="1"></label>
+                    </div>
+                  </div>
+                  <div class="compact-field dual-step-field">
+                    <span><b>采样轨道</b><output id="samplingStepsValue">一采 18 · 总计 20 步</output></span>
+                    <div class="dual-step-range" id="generationStepTrack" style="--first-step-percent:58.62%;--total-step-percent:65.52%">
+                      <i class="dual-step-rail"></i><i class="dual-step-total-fill"></i><i class="dual-step-first-fill"></i>
+                      <input name="sampling_steps" class="total-step-slider" type="range" min="1" max="30" step="1" value="20" aria-label="总采样步数">
+                      <input id="firstPassSteps" class="first-step-slider" type="range" min="1" max="30" step="1" value="18" aria-label="第一次采样步数">
+                    </div>
+                    <div class="dual-step-legend"><span class="first-pass-key">● 第一次采样 <b id="firstPassStepsValue">18 步</b></span><span class="total-pass-key">● 完整轨迹 <b id="totalStepsValue">20 步</b></span></div>
+                    <small id="samplingStepsHint">绿色节点生成预览并切换分辨率；橙色节点结束完整轨迹。</small>
+                  </div>
+                  <div class="acceleration-pair">
+                    <label class="compact-field acceleration-field" id="accelerationAdvanced"><span>一采加速力度 <output id="accelerationValue">0 · Dense</output></span><input name="acceleration" type="range" min="0" max="100" step="1" value="0" aria-label="一采加速力度"><small id="accelerationSafety">控制起点到绿色分叉点的加速调度。</small></label>
+                    <label class="compact-field acceleration-field" id="secondPassAccelerationAdvanced"><span>二采加速力度 <output id="secondPassAccelerationValue">0 · Dense</output></span><input name="second_pass_acceleration" type="range" min="0" max="100" step="1" value="0" aria-label="二采加速力度"><small id="secondPassAccelerationSafety">控制绿色分叉点到橙色终点的正式高清分支。</small></label>
                   </div>
                 </div>
+                <input name="execution_mode" type="hidden" value="complete">
               </div>
             </details>
             <input name="advanced" type="hidden" value="false">
@@ -173,68 +162,232 @@
       </div>
     </section>
 
+    <section class="workspace-page" id="infinitePage" hidden>
+      <div class="infinite-shell">
+        <aside class="panel infinite-project-rail">
+          <div class="infinite-rail-head"><div><span class="eyebrow">LONG VIDEO PROJECTS</span><h2>长视频项目</h2></div><button id="newInfiniteProject" type="button" class="secondary-button">新建</button></div>
+          <div id="infiniteProjectList" class="infinite-project-list"></div>
+        </aside>
+
+        <section class="infinite-main">
+          <form id="infiniteProjectForm" class="panel infinite-card">
+            <input name="workflow_version" type="hidden" value="3">
+            <input name="creation_mode" type="hidden" value="online">
+            <div class="infinite-heading"><div><span class="eyebrow">NEW LONG VIDEO</span><h1>开始长视频创作</h1><p>先选择创作方式，再设定 SelfLift 采样轨迹。各窗口共同建立连续的低分辨率 latent 轨道；最终沿整条轨道重叠滑窗终采并输出高清成片。</p></div></div>
+            <label class="field"><span>项目名称</span><input name="title" value="未命名长视频" maxlength="120" required></label>
+            <section class="infinite-create-mode-section">
+              <span class="infinite-section-label">创作方式</span>
+              <div class="infinite-create-mode-grid">
+                <button type="button" class="infinite-create-mode active" data-project-mode="online"><b>在线创作</b><small>逐段生成、查看累计预览，满意后再追加下一窗。</small></button>
+                <button type="button" class="infinite-create-mode" data-project-mode="json"><b>JSON 一键创作</b><small>一次导入所有窗口，后台逐窗完成正式 SelfLift 轨迹并直接输出高清成片。</small></button>
+              </div>
+            </section>
+            <section id="infiniteJsonFoundation" hidden>
+              <label class="field"><span>长视频 JSON 脚本</span><textarea id="infiniteProjectJsonInput" rows="18" spellcheck="false"></textarea><small>每个窗口只需要一个 prompt。Ref2VA 的每个窗口可用独立 references 映射 Picture/Audio ID；省略时继承上一窗口。</small></label>
+              <div class="infinite-json-template-row"><button id="loadInfiniteProjectJsonTemplate" type="button" class="secondary-button">恢复模板</button><a class="secondary-button" href="/static/long-video-examples/infinite-project-template.json" download>下载 JSON 模板</a></div>
+            </section>
+            <details class="infinite-settings-block infinite-collapsible" open>
+              <summary><span>画面与输出</span><small>创建后锁定分辨率与比例</small></summary>
+              <div class="infinite-settings-content">
+                <div class="infinite-two-col infinite-geometry-grid">
+                  <div class="field dual-step-field resolution-track-field" id="infiniteProjectResolutionControl">
+                    <span><b>分辨率轨道</b><output id="infiniteProjectResolutionValue">一采 540P · 二采 1080P</output></span>
+                    <div class="dual-step-range dual-resolution-range" id="infiniteProjectResolutionTrack" style="--first-step-percent:16.67%;--total-step-percent:66.67%">
+                      <i class="dual-step-rail"></i><i class="dual-step-total-fill"></i><i class="dual-step-first-fill"></i>
+                      <input id="infiniteProjectFinalResolutionSlider" class="total-step-slider" type="range" min="360" max="1440" step="1" value="1080" aria-label="二次采样分辨率">
+                      <input id="infiniteProjectResolutionSlider" class="first-step-slider" type="range" min="360" max="1440" step="1" value="540" aria-label="第一次采样分辨率">
+                    </div>
+                    <div class="dual-step-legend"><span class="first-pass-key">● 一次采样 <b id="infiniteProjectFirstResolutionValue">540P</b></span><span class="total-pass-key">● 二次采样 <b id="infiniteProjectFinalResolutionValue">1080P</b></span></div>
+                    <div class="resolution-stops infinite-project-resolution-stops" aria-label="二次采样常用分辨率驻点"><button type="button" data-infinite-final-resolution="360p">360P</button><button type="button" data-infinite-final-resolution="480p">480P</button><button type="button" data-infinite-final-resolution="540p">540P</button><button type="button" data-infinite-final-resolution="720p">720P</button><button type="button" data-infinite-final-resolution="900p">900P</button><button type="button" data-infinite-final-resolution="1080p">1080P</button><button type="button" data-infinite-final-resolution="1220p">1220P</button><button type="button" data-infinite-final-resolution="1440p">1440P</button></div>
+                    <input name="preview_resolution" type="hidden" value="540p"><input name="final_resolution" type="hidden" value="1080p">
+                    <small id="infiniteProjectResolutionHint">绿色节点不能超过橙色节点；重合时不执行 latent 放大。</small>
+                  </div>
+                  <label class="field infinite-aspect-field"><span>画面比例</span><select name="aspect_ratio"><option value="16:9" selected>16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option><option value="4:3">4:3</option><option value="3:4">3:4</option></select></label>
+                </div>
+              </div>
+            </details>
+            <details class="infinite-settings-block infinite-collapsible" open>
+              <summary><span>推理参数</span><small>与单视频创作使用同一条双节点采样轨道</small></summary>
+              <div class="infinite-settings-content">
+                <div class="infinite-inference-grid">
+                  <div class="field infinite-inference-mode-card">
+                    <div class="inline-tool-row"><span><b>启用 LoRA 加速</b><small id="infiniteProjectModelVariantSummary">开启 · LoRA 高速</small></span><label class="compact-toggle" aria-label="启用 LoRA 加速"><input id="infiniteProjectLoraEnabled" type="checkbox" checked><i></i></label></div>
+                    <select name="model_variant" class="visually-hidden-control" tabindex="-1" aria-hidden="true"><option value="lora" selected>LoRA 高速</option><option value="base">INT8 原始权重</option></select>
+                  </div>
+                  <div class="field dual-step-field infinite-dual-step-field">
+                    <span><b>采样轨道</b><output id="infiniteProjectSamplingStepsValue">一采 6 · 二采 2 · 总计 8 步</output></span>
+                    <div class="dual-step-range" id="infiniteProjectStepTrack" style="--first-step-percent:55.56%;--total-step-percent:77.78%">
+                      <i class="dual-step-rail"></i><i class="dual-step-total-fill"></i><i class="dual-step-first-fill"></i>
+                      <input name="sampling_steps" class="total-step-slider" type="range" min="1" max="10" step="1" value="8" aria-label="完整轨迹步数">
+                      <input id="infiniteProjectFirstPassSteps" class="first-step-slider" type="range" min="1" max="9" step="1" value="6" aria-label="第一次采样步数">
+                    </div>
+                    <div class="dual-step-legend"><span class="first-pass-key">● 第一次采样 <b id="infiniteProjectFirstPassStepsValue">6 步</b></span><span class="total-pass-key">● 完整轨迹 <b id="infiniteProjectTotalStepsValue">8 步</b></span></div>
+                    <input name="final_sampling_steps" type="hidden" value="2">
+                    <small>绿色节点切换到最终分辨率；绿色到橙色之间是第二次采样。</small>
+                  </div>
+                </div>
+                <p class="infinite-locked-note">分辨率、比例、权重和步数轨迹写入项目后不再改变。在线创作可在每个窗口设置加速力度；整片二次采样的加速指数在定稿时设置。</p>
+              </div>
+            </details>
+            <button id="createInfiniteProject" type="submit" class="submit-button small">进入在线创作 →</button>
+            <div id="infiniteCreateMessage" class="message" hidden></div>
+          </form>
+
+          <div id="infiniteWorkspace" hidden>
+            <section class="panel infinite-preview-card">
+              <div class="infinite-heading"><div><span id="infiniteOutputEyebrow" class="eyebrow">CUMULATIVE PREVIEW</span><h1 id="infiniteProjectTitle">长视频项目</h1><p id="infiniteProjectMeta">0 个窗口</p></div><div class="infinite-preview-actions"><button id="deleteInfiniteProject" type="button" class="secondary-button danger-action">删除项目</button><a id="downloadInfiniteVideo" class="secondary-button" download hidden>下载预览</a></div></div>
+              <div id="infiniteProjectContract" class="infinite-project-contract"></div>
+              <div class="infinite-video-stage"><video id="infiniteVideo" controls playsinline></video><div id="infiniteVideoEmpty">提交第一个窗口后，低分辨率累计预览会出现在这里。</div></div>
+            </section>
+
+            <section class="panel infinite-card infinite-window-planner">
+              <div class="infinite-heading"><div><span class="eyebrow">WINDOW INPUT</span><h2>窗口提示词</h2><p id="infiniteCreationModeDescription">按项目创建时选择的方式生成累计预览。</p></div><b id="infiniteCreationModeBadge" class="infinite-mode-badge">在线创作</b></div>
+              <div id="infiniteManualMode"><div class="infinite-planner-actions"><p>只有队首草稿可以提交；生成成功后才允许追加下一窗。</p><button id="addInfiniteWindowPrompt" type="button" class="secondary-button">＋ 添加窗口</button></div><div id="infiniteWindowList" class="infinite-window-list"></div></div>
+              <div id="infiniteJsonMode" hidden>
+                <label class="field"><span>长视频 JSON</span><textarea id="infiniteJsonInput" rows="18" spellcheck="false"></textarea><small>每窗可用 acceleration 设置自己的加速力度，final_acceleration 设置整片二次采样加速指数；Ref2VA 的每个窗口可独立设置 references，省略时继承上一窗口。</small></label>
+                <div class="infinite-json-actions"><button id="loadInfiniteJsonTemplate" type="button" class="secondary-button">恢复模板</button><a class="secondary-button" href="/static/long-video-examples/infinite-project-template.json" download>下载 JSON 模板</a><button id="stopInfiniteBatch" type="button" class="secondary-button danger-action" hidden>停止自动续排</button><button id="startInfiniteBatch" type="button" class="submit-button small">导入并生成最终成片</button></div>
+                <div id="infiniteJsonMessage" class="message" hidden></div>
+              </div>
+            </section>
+
+            <form id="infiniteWindowForm" class="panel infinite-card" hidden>
+              <div class="infinite-heading"><div><span class="eyebrow">WINDOW EDITOR</span><h2 id="infiniteWindowTitle">编辑第 1 个窗口</h2><p>写入当前窗口的完整提示词；上一窗口的结尾状态由系统自动承接。</p></div><button id="collapseInfiniteWindowEditor" type="button" class="secondary-button">收起编辑器</button></div>
+              <section id="infiniteWindowReferences" class="infinite-settings-block infinite-window-references">
+                <div class="infinite-reference-heading"><div><h3>当前窗口参考素材</h3><small id="infiniteReferenceInheritanceSummary">首窗口尚无可继承素材</small></div><label id="infiniteInheritReferencesRow" class="compact-toggle-row" hidden><span>复用上一窗口素材</span><label class="compact-toggle" aria-label="复用上一窗口参考素材"><input name="inherit_references" type="checkbox" checked><i></i></label></label></div>
+                <div id="infiniteInheritedReferenceList" class="infinite-inherited-reference-list" hidden></div>
+                <div id="infiniteKeyframes" class="frame-grid">
+                  <label class="dropzone" id="infiniteFirstFrame"><input name="first_frame" type="file" accept="image/png,image/jpeg,image/webp"><img alt="首帧预览"><span class="drop-copy"><b>＋</b><strong>添加首帧</strong><small>当前窗口可选</small></span><button type="button" class="remove-frame">×</button></label>
+                  <label class="dropzone" id="infiniteLastFrame"><input name="last_frame" type="file" accept="image/png,image/jpeg,image/webp"><img alt="尾帧预览"><span class="drop-copy"><b>＋</b><strong>添加尾帧</strong><small>当前窗口可选</small></span><button type="button" class="remove-frame">×</button></label>
+                </div>
+                <div id="infiniteReferences" class="reference-attachments" hidden>
+                  <div class="attachment-controls">
+                    <label class="reference-file-drop" id="infiniteReferenceFileDrop"><input id="infiniteReferenceFiles" type="file" accept="image/png,image/jpeg,image/webp,audio/wav,audio/mpeg,audio/flac,audio/mp4,audio/ogg,.opus" multiple><span>＋ 添加文件</span></label>
+                    <small>图片≤9 · 音频≤3</small>
+                  </div>
+                  <div hidden><input id="infiniteReferenceImages" name="reference_images" type="file" accept="image/png,image/jpeg,image/webp" multiple><input id="infiniteReferenceAudios" name="reference_audios" type="file" accept="audio/wav,audio/mpeg,audio/flac,audio/mp4,audio/ogg,.opus" multiple></div>
+                  <div id="infiniteReferenceAttachmentTray" class="reference-attachment-tray"><div id="infiniteReferencePreview" class="reference-role-list"></div><div id="infiniteReferenceAudioPreview" class="reference-role-list"></div></div>
+                </div>
+              </section>
+              <label class="field infinite-window-prompt"><span>当前窗口完整提示词</span><textarea name="window_description" rows="10" maxlength="12000" required placeholder="可以直接填写 [Shot 1]…，也可以粘贴包含 integrated_multimodal_description、overall_soundscape 和 non_diegetic_music 的完整 H3 提示词。"></textarea></label>
+              <details class="infinite-settings-block infinite-collapsible">
+                <summary><span>窗口参数</span><small>只影响当前窗口</small></summary>
+                <div class="infinite-settings-content">
+                  <div class="infinite-two-col">
+                    <label class="field range-field"><span>新增时长 <output id="infiniteWindowDurationValue">5.0 秒</output></span><input name="duration_seconds" type="range" min="1" max="15" step="0.25" value="5"></label>
+                    <label class="field range-field"><span>参考上一段 <output id="infiniteWindowOverlapValue">1.625 秒</output></span><input name="overlap_seconds" type="range" min="0" max="4" step="0.125" value="1.625"><small>0 表示从明确硬切开始，不引用上一段尾部。</small></label>
+                  </div>
+                  <small id="infiniteWindowDurationBudgetHint" class="infinite-duration-budget-hint">新增时长与参考上一段合计最多 15 秒。</small>
+                  <label class="field range-field"><span>当前窗口加速力度 <output id="infiniteWindowAccelerationValue">50</output></span><input name="acceleration" type="range" min="0" max="100" step="1" value="50"><small>同时用于当前窗口的一采和低分辨率预览分支；下一个窗口可以使用不同数值。</small></label>
+                  <div class="inline-tool-row"><span><b>长期记忆</b><small id="infiniteMemorySummary">开启 · 视觉 6 · 音频 1</small></span><label class="compact-toggle" aria-label="启用长期记忆"><input id="infiniteMemoryEnabled" type="checkbox" checked><i></i></label></div>
+                  <div id="infiniteMemoryControls" class="infinite-three-col">
+                    <label class="field range-field"><span>视觉记忆锚点 <output id="infiniteVisualMemoryValue">6</output></span><input name="visual_memory_capacity" type="range" min="0" max="24" step="1" value="6"></label>
+                    <label class="field range-field"><span>音频记忆锚点 <output id="infiniteAudioMemoryValue">1</output></span><input name="audio_memory_capacity" type="range" min="0" max="3" step="1" value="1"></label>
+                    <label class="field"><span>视觉记忆分辨率</span><select name="visual_memory_resolution"><option value="360p" selected>360P</option><option value="480p">480P</option><option value="720p">720P</option><option value="original">原分辨率</option></select></label>
+                  </div>
+                  <label class="field"><span>随机种子</span><input name="seed" placeholder="random" value="random"><small>只影响当前窗口；项目的分辨率、权重和步数轨迹保持锁定。</small></label>
+                </div>
+              </details>
+              <input name="save_shared_as_default" type="hidden" value="true">
+              <div id="infiniteWindowMessage" class="message" hidden></div>
+              <button id="appendInfiniteWindow" type="submit" class="submit-button">生成预览并接到尾部</button>
+            </form>
+
+            <section id="infiniteFinalSampling" class="panel infinite-card infinite-final-card">
+              <div class="infinite-heading"><div><span class="eyebrow">FULL-FILM SECOND SAMPLING</span><h2>整片二次采样</h2><p>确认累计预览后，按项目创建时确定的分辨率和步数对整条视频统一二次采样。</p></div><b id="infiniteFinalStatus" class="infinite-final-status">等待预览完成</b></div>
+              <form id="infiniteFinalSamplingForm">
+                <input name="resolution" type="hidden" value="1080p"><input name="steps" type="hidden" value="4">
+                <div class="settings-inline-grid infinite-final-controls">
+                  <label class="field range-field"><span>二次采样加速指数 <output id="infiniteFinalAccelerationValue">75</output></span><input name="acceleration" type="range" min="0" max="100" step="1" value="75"><small>只影响从一次采样分叉点到最终成片的二次采样阶段。</small></label>
+                  <label class="field range-field"><span>二采 Sigma 比例 <output id="infiniteFinalSigmaScaleValue">1.00</output></span><input name="sigma_scale" type="range" min="0.25" max="1" step="0.05" value="1"><small>1.00 沿用项目原有 Sigma；调低会减少二采的重绘幅度。</small></label>
+                </div>
+                <div id="infiniteFinalMessage" class="message" hidden></div>
+                <button id="submitInfiniteFinal" type="submit" class="submit-button">对整片进行二次采样</button>
+              </form>
+              <div id="infiniteFinalResult" class="infinite-final-result" hidden><video id="infiniteFinalVideo" controls playsinline></video><a id="downloadInfiniteFinal" class="secondary-button" download>下载最终成片</a></div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
     <section class="workspace-page" id="tasksPage" hidden>
       <section class="panel task-manager">
-        <div class="task-manager-head"><div><span class="eyebrow">GPU QUEUE</span><h1>任务管理</h1><p>拖动等待中的任务调整顺序；正在执行的任务只能取消，不能重排。</p></div><button id="refreshJobs" class="secondary-button">刷新</button></div>
+        <div class="task-manager-head"><div><span class="eyebrow">GPU QUEUE</span><h1>任务中心</h1><p>拖动等待中的任务调整顺序；正在执行的任务只能取消，不能重排。</p></div><button id="refreshJobs" class="secondary-button">刷新</button></div>
         <section class="resource-dashboard" aria-label="主机实时资源">
-          <article><div><span>CPU</span><strong id="cpuUsage">--%</strong></div><div class="resource-track"><i id="cpuBar"></i></div><small id="cpuDetail">读取中</small></article>
-          <article><div><span>系统内存</span><strong id="memoryUsage">-- GiB</strong></div><div class="resource-track"><i id="memoryBar"></i></div><small id="memoryDetail">读取中</small></article>
+          <article><div><span>主机物理内存（驻留 / 总量）</span><strong id="hostMemoryUsage">-- GiB</strong></div><div class="resource-track"><i id="hostMemoryBar"></i></div><small id="hostMemoryDetail">读取中</small></article>
+          <article><div><span>H3视频服务（驻留总量）</span><strong id="memoryUsage">-- GiB</strong></div><div class="resource-track"><i id="memoryBar"></i></div><small id="memoryDetail">读取中</small></article>
           <article><div><span>GPU</span><strong id="gpuUsage">--%</strong></div><div class="resource-track gpu"><i id="gpuBar"></i></div><small id="gpuDetail">读取中</small></article>
           <article><div><span>GPU 显存</span><strong id="vramUsage">-- GiB</strong></div><div class="resource-track gpu"><i id="vramBar"></i></div><small id="vramDetail">读取中</small></article>
         </section>
         <div class="manager-summary"><div><span>正在运行</span><strong id="runningCount">0</strong></div><div><span>等待队列</span><strong id="queuedCount">0</strong></div><div><span>已完成</span><strong id="completedCount">0</strong></div><div><span>服务热态</span><strong id="warmStateText">检查中</strong></div></div>
         <section class="task-section"><div class="task-section-title"><h2>正在运行</h2><span>真实阶段进度</span></div><div id="runningJobs" class="manager-jobs"></div></section>
         <section class="task-section"><div class="task-section-title"><h2>等待队列</h2><span>拖动卡片改变执行顺序</span></div><div id="queuedJobs" class="manager-jobs sortable-jobs"></div></section>
-        <section class="task-section"><div class="task-section-title"><h2>历史任务</h2><span>可预览、下载或删除记录与输出</span></div><div id="historyJobs" class="manager-jobs history-grid"></div></section>
+        <section class="task-section"><div class="task-section-title history-section-title"><div><h2>历史任务</h2><span>可预览、下载或删除记录与输出</span></div><div class="history-bulk-tools" aria-label="批量管理历史任务"><span id="historySelectionCount">已选择 0 项</span><button id="selectAllHistory" type="button" class="secondary-button">全选当前历史</button><button id="clearHistorySelection" type="button" class="secondary-button" disabled>清除选择</button><button id="deleteSelectedHistory" type="button" class="secondary-button danger-action" disabled>删除已选</button></div></div><div id="historyJobs" class="manager-jobs history-grid"></div></section>
       </section>
     </section>
   </main>
 
   <dialog id="settingsDialog">
     <form method="dialog">
-      <div class="dialog-heading"><h3>服务与AI设置</h3><button value="cancel">×</button></div>
+      <div class="dialog-heading"><h3>服务设置</h3><button value="cancel">×</button></div>
       <label class="field"><span>服务 API Key</span><input id="apiKeyInput" type="password" placeholder="本地无鉴权时留空"></label>
       <p>用于访问设置了 H3_SERVE_API_KEY 的视频服务。</p>
-      <label class="field"><span>小米 MiMo API Key</span><input id="mimoApiKeyInput" type="password" autocomplete="off" placeholder="填写新Key；留空则保留服务器现有Key"></label>
-      <p id="mimoKeyStatus">正在检查服务器配置……</p>
-      <button id="clearMimoKey" type="button" class="ghost-button">清除服务器 MiMo Key</button>
-      <section class="lora-settings">
-        <div class="memory-settings-head"><span>LoRA 权重版本</span><b id="globalLoraBadge">扫描中</b></div>
-        <div class="lora-settings-row">
-          <label class="field"><span>已安装的 H3 LoRA</span><select id="globalLoraCheckpoint"><option value="">正在扫描 models/loras…</option></select></label>
-          <button id="loadGlobalLora" type="button" class="secondary-button">加载所选 LoRA</button>
+      <details class="service-settings-drawer lora-settings">
+        <summary><span>LoRA 权重版本</span><b id="globalLoraBadge">扫描中</b></summary>
+        <div class="service-settings-drawer-body">
+          <div class="lora-settings-row">
+            <label class="field"><span>已安装的 H3 LoRA</span><select id="globalLoraCheckpoint"><option value="">正在扫描 models/loras…</option></select></label>
+            <button id="loadGlobalLora" type="button" class="secondary-button">加载所选 LoRA</button>
+          </div>
+          <p id="globalLoraStatus">扫描 models/loras 中兼容的 MiniMax H3 原生与 LightX2V Diffusers LoRA。切换要求任务队列为空，并会重建当前热引擎。</p>
         </div>
-        <p id="globalLoraStatus">扫描 models/loras 中兼容的 MiniMax H3 原生与 LightX2V Diffusers LoRA。切换要求任务队列为空，并会重建当前热引擎。</p>
-      </section>
-      <section class="checkpoint-preview-settings">
-        <div class="memory-settings-head"><span>断点预览</span><b>全局默认</b></div>
-        <div class="settings-inline-grid">
-          <label class="field"><span>预览分辨率</span><select id="globalCheckpointPreviewResolution"><option value="360p">360P</option><option value="480p">480P</option><option value="720p">720P</option></select></label>
-          <label class="field range-field"><span>LoRA预览步数 <output id="globalCheckpointPreviewStepsValue">4 步</output></span><input id="globalCheckpointPreviewSteps" type="range" min="1" max="8" step="1" value="4"></label>
+      </details>
+      <details class="service-settings-drawer reference-media-settings">
+        <summary><span>参考素材自动压缩</span><b>全局默认</b></summary>
+        <div class="service-settings-drawer-body">
+          <div class="settings-inline-grid">
+            <label class="field"><span>参考图片</span><select id="globalReferenceImageResolution"><option value="original">保持原分辨率</option><option value="360p">360P</option><option value="480p">480P</option><option value="720p">720P</option></select></label>
+            <label class="field"><span>参考视频</span><select id="globalReferenceVideoResolution"><option value="original">保持原分辨率</option><option value="360p">360P</option><option value="480p">480P</option><option value="720p">720P</option></select></label>
+          </div>
+          <p>档位只控制像素采样分辨率：始终按原宽高比等比例缩小，原画幅尺寸、完整构图和视频时长不变；不裁切、不拉伸、不补边，也不放大小素材。该默认同时作用于工作台、API和ComfyUI。</p>
         </div>
-        <p>断点后用同一 H3 权重挂载 Turbo LoRA 生成临时预览；不改变正式轨迹、正式权重或继续生成的结果。创作页仅需选择断点位置。</p>
-      </section>
-      <section class="reference-media-settings">
-        <div class="memory-settings-head"><span>参考素材自动压缩</span><b>全局默认</b></div>
-        <div class="settings-inline-grid">
-          <label class="field"><span>参考图片</span><select id="globalReferenceImageResolution"><option value="original">保持原分辨率</option><option value="360p">360P</option><option value="480p">480P</option><option value="720p">720P</option></select></label>
-          <label class="field"><span>参考视频</span><select id="globalReferenceVideoResolution"><option value="original">保持原分辨率</option><option value="360p">360P</option><option value="480p">480P</option><option value="720p">720P</option></select></label>
+      </details>
+      <details class="service-settings-drawer face-repair-settings">
+        <summary><span>人脸修复画布</span><b>全局默认</b></summary>
+        <div class="service-settings-drawer-body">
+          <div class="settings-inline-grid">
+            <label class="field range-field"><span>方形画布边长 <output id="globalFaceRepairCanvasValue">768P</output></span><input id="globalFaceRepairCanvas" type="range" min="192" max="1088" step="32" value="768"></label>
+            <label class="field"><span>方形 Cell 容量</span><select id="globalFaceRepairCapacity"><option value="1">1（1×1）</option><option value="4" selected>4（2×2）</option><option value="9">9（3×3）</option><option value="16">16（4×4）</option></select></label>
+          </div>
+          <p>系统只选择在单个 Cell 内能获得至少 1.5 倍放大的欠清晰人脸；修复固定使用四步 Turbo。时序分窗按画布自动设置：540P 档以内最多 15 秒，720P 档以内最多 10 秒，1080P 档以内最多 6 秒。</p>
         </div>
-        <p>档位只控制像素采样分辨率：始终按原宽高比等比例缩小，原画幅尺寸、完整构图和视频时长不变；不裁切、不拉伸、不补边，也不放大小素材。该默认同时作用于工作台、API和ComfyUI。</p>
-      </section>
-      <section class="second-sampling-settings">
-        <div class="memory-settings-head"><span>二次采样时间窗口</span><b>全局默认</b></div>
-        <label class="field range-field"><span>窗口长度 <output id="globalSecondSamplingWindowValue">约 5.7 秒 · 136 帧</output></span><input id="globalSecondSamplingWindow" type="range" min="68" max="362" step="1" value="136"></label>
-        <p>短窗口通常更快；若出现跨窗口动作、人物或背景不连续，请调长。后端自动按 H3 时间相位对齐，并自动处理 17 帧重叠与 latent 交叉融合。</p>
-      </section>
-      <section class="memory-settings"><div class="memory-settings-head"><span>主机内存运行模式</span><b id="detectedMemory">检测中</b></div><div id="memoryProfileList" class="memory-profile-list"></div><p id="memoryProfileHint">模式改变的是CPU权重驻留和冷加载，不改变模型权重、采样步数或画质。切换要求任务队列为空并会重新预加载H3。</p></section>
+      </details>
+      <details class="service-settings-drawer checkpoint-preview-settings">
+        <summary><span>中途预览</span><b>全局默认</b></summary>
+        <div class="service-settings-drawer-body">
+          <label class="field range-field"><span>Preview Step <output id="globalPreviewStepsValue">2 步</output></span><input id="globalPreviewSteps" type="range" min="1" max="4" step="1" value="2"></label>
+          <p>从一次采样分叉点到预览视频继续推理的步数；同时作用于单视频创作和长视频在线创作。</p>
+        </div>
+      </details>
+      <details class="service-settings-drawer second-sampling-window-settings">
+        <summary><span>二采时序滑窗</span><b id="globalSecondSamplingWindowBadge">已开启</b></summary>
+        <div class="service-settings-drawer-body">
+          <div class="inline-tool-row"><span><b>启用滑窗</b><small>限制高分辨率尾段的单次时序范围</small></span><label class="compact-toggle" aria-label="启用滑窗"><input id="globalSecondSamplingWindowEnabled" type="checkbox" checked><i></i></label></div>
+          <div id="globalSecondSamplingWindowControls">
+            <label class="field range-field"><span>最大窗口时长 <output id="globalSecondSamplingWindowValue">5.0 秒</output></span><input id="globalSecondSamplingWindowSeconds" type="range" min="3" max="15" step="0.5" value="5"></label>
+            <label class="field range-field"><span>参考上一窗口 <output id="globalSecondSamplingOverlapValue">1.0 秒</output></span><input id="globalSecondSamplingOverlapSeconds" type="range" min="0" max="4" step="0.1" value="1"></label>
+          </div>
+          <p id="globalSecondSamplingWindowSummary">高分辨率尾段按重叠时间视图计算；参考时长会对齐到 H3 合法帧网格。</p>
+        </div>
+      </details>
       <button id="saveSettings" value="default" class="submit-button small">保存并应用</button>
     </form>
   </dialog>
   <dialog id="workspaceDialog" class="workspace-dialog"><form method="dialog"><div class="dialog-heading"><h3>选择工作空间</h3><button value="cancel">×</button></div><p>生成视频、导入素材、任务记录和断点都保存在这个文件夹。模型权重与编译缓存不会重复复制。</p><div class="workspace-path-row"><input id="workspacePathInput" type="text" spellcheck="false" aria-label="工作空间绝对路径"><button type="button" id="openWorkspacePath" class="secondary-button">打开</button></div><div class="workspace-browser-head"><button type="button" id="workspaceParent" class="ghost-button">← 上一级</button><button type="button" id="workspaceDefault" class="ghost-button">项目默认</button></div><div id="workspaceDirectories" class="workspace-directories"></div><div id="workspaceMessage" class="message" hidden></div><button type="button" id="selectWorkspace" class="submit-button small">使用这个文件夹</button></form></dialog>
   <dialog id="videoDialog" class="video-dialog"><form method="dialog"><button class="video-close">×</button></form><video id="resultVideo" controls playsinline></video><a id="downloadVideo" class="download-button" download>下载视频</a></dialog>
-  <dialog id="secondSamplingDialog" class="compact-second-sampling-dialog"><form id="secondSamplingForm"><input id="secondSamplingSourceId" type="hidden"><div class="dialog-heading"><h3>H3 二次采样</h3><button type="button" id="closeSecondSampling">×</button></div><p id="secondSamplingSourceSummary">从已完成的干净 AV latent 放大并低噪细化；原提示词、图片与音频参考保持不变。</p><div class="settings-inline-grid"><label class="field"><span>目标分辨率</span><select id="secondSamplingResolution"><option value="720p">720P</option><option value="1080p" selected>1080P</option><option value="1440p">1440P（实验）</option></select></label><label class="field range-field"><span>二次采样步数 <output id="secondSamplingStepsValue">2 步</output></span><input id="secondSamplingSteps" type="range" min="1" max="8" step="1" value="2"></label><label class="field"><span>重绘强度</span><select id="secondSamplingStrength"><option value="preserve">保真 · 低噪声</option><option value="standard" selected>标准 · 官方基准</option><option value="enhance">增强 · 更多细节</option><option value="strong">强重绘 · 高风险</option></select><small id="secondSamplingStrengthHint">Denoise 0.20 · 起始 Sigma 约 0.60</small></label><label class="field range-field"><span>加速力度 <output id="secondSamplingAccelerationValue">75</output></span><input id="secondSamplingAcceleration" type="range" min="0" max="100" step="1" value="75"></label></div><p>二采固定使用原始 Base 权重与 SA Solver。</p><p id="secondSamplingWindowSummary">时间窗口约 5.7 秒；Overlap 与 latent 交叉融合自动处理。</p><div id="secondSamplingMessage" class="message" hidden></div><button type="submit" class="submit-button small">加入二次采样队列</button></form></dialog>
-  <script src="/static/i18n.js?v=20260829-temporal-window-r1" defer></script>
-  <script src="/static/app.js?v=20260829-temporal-window-r1" defer></script>
+  <dialog id="videoRepairDialog" class="compact-video-repair-dialog"><form id="videoRepairForm"><input id="videoRepairSourceId" type="hidden"><div class="dialog-heading"><h3>人脸修复</h3><button type="button" id="closeVideoRepair">×</button></div><p id="videoRepairSourceSummary">自动找出视频中欠清晰且重要的人脸，批量放大修复后回填原画面。</p><div class="settings-inline-grid"><label class="field range-field"><span>修复加速力度 <output id="videoRepairAccelerationValue">50</output></span><input id="videoRepairAcceleration" type="range" min="0" max="100" step="1" value="50"></label></div><p id="videoRepairGeometrySummary">使用全局方形画布与 Cell 容量，固定四步 Turbo 修复。</p><div id="videoRepairMessage" class="message" hidden></div><button type="submit" class="submit-button small">加入人脸修复队列</button></form></dialog>
+  <script src="/static/i18n.js?v=20260912-single-window-v1" defer></script>
+  <script src="/static/app.js?v=20260912-single-window-v1" defer></script>
+  <script src="/static/infinite-video.js?v=20260912-full-film-sigma-v1" defer></script>
 </body>
 </html>

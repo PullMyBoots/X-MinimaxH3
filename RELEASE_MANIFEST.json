@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "release": "X-MinimaxH3",
-  "version": "1.0.0",
-  "date": "2026-08-29",
+  "version": "1.1.0",
+  "date": "2026-09-12",
   "source_visibility": "public-source",
   "calibrated_gpu": "NVIDIA GeForce RTX 4090 (SM89)",
   "python": "3.10.20",
@@ -10,31 +10,78 @@
   "service_cuda_toolkit": "13.3",
   "upstream_sources": {
     "MiniMax-H3": "8d8824efaf94586c0cc9ac7ad8d0723d4d6420ea",
-    "LightX2V": "205d5c872d01557935dc87d67156f4f94069ea65"
+    "LightX2V": "231e2307f15b9eb60fe3f877f7eed945c8d8d717",
+    "SageAttention": "eb615cf6cf4d221338033340ee2de1c37fbdba4a",
+    "SpargeAttention": "ae5b629ebb41e41f86b3ea2ab5a3283f13ac151a",
+    "comfyui-SelfLift-design-reference": "b143ed2731438e606c7a6c70ee580a1f86e7bf72",
+    "Comfyui-Minimax-H3-Latent-Upscaler-code": "6a4b191e8af583b7c097f564690325f91d18c2e2",
+    "FlashVSR": "b527c6f285fb30df530f5febc8b45764a789c961",
+    "Block-Sparse-Attention": "49d6c39e4dc0303442cda3bb758b3925d4399c49",
+    "ComfyUI-H3-Continuum": "0a7c6703b7715689c7aab4177e44e5fcd318fe5b",
+    "ComfyUI-MiniMax-H3-LongMedia": "4a31874addc3d1b632589ac0454eb990a2736547"
   },
-  "kernel_calibration_assets": {
-    "backends/turbo/custom_node/h3_silu_temb_grid.safetensors": "30eb3c2cc7fb6b470d9717ff840d359313ac27cd64b705e32da1baa10f72d6a8"
+  "bundled_runtime_assets": {
+    "backends/turbo/custom_node/h3_silu_temb_grid.safetensors": "30eb3c2cc7fb6b470d9717ff840d359313ac27cd64b705e32da1baa10f72d6a8",
+    "h3serve/assets/face_detection_yunet_2023mar.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "wheels/block_sparse_attn-0.0.2-cp311-cp311-linux_x86_64.whl": "322c1bfbd09b40a23146dacdd452debd5cb4a435741bcff83537228c494e9bf1"
   },
   "launchers": [
     "fl2va_int8_24gb",
     "ref2va_int8_24gb",
     "fl2va_int8_16gb",
     "ref2va_int8_16gb",
+    "fl2va_w4a8_24gb",
+    "ref2va_w4a8_24gb",
+    "fl2va_w4a8_16gb",
+    "ref2va_w4a8_16gb",
     "fl2va_w4a8_8gb",
     "ref2va_w4a8_8gb"
   ],
+  "public_model_choices": [
+    "fl2va_w4a8",
+    "ref2va_w4a8",
+    "fl2va_int8",
+    "ref2va_int8"
+  ],
+  "release_features": [
+    "single_video_creation",
+    "long_video_online_creation",
+    "long_video_json_creation",
+    "ref2va_per_window_json_references",
+    "selflift_progressive_generation",
+    "fork_preview",
+    "full_film_second_sampling",
+    "temporal_second_sampling_windows",
+    "automatic_face_repair",
+    "six_ai_prompt_authoring_guides",
+    "bilingual_console",
+    "task_history_and_downloads",
+    "comfyui_http_connector"
+  ],
+  "resource_control": {
+    "vram_routing": "automatic_8gb_16gb_24gb",
+    "host_residency": "automatic_internal_policy",
+    "first_and_final_acceleration": "independent_user_controls"
+  },
   "validation": {
-    "unit_tests_run": 707,
-    "unit_tests_skipped": 4,
-    "unit_tests_failed": 0,
-    "full_model_preflight": "passed",
-    "real_generation_routes": [
-      "base_fl2va",
-      "lightx2v_fl2va_4step",
-      "lightx2v_fl2va_8step",
-      "lightx2v_ref2va_4step"
-    ]
+    "release_test_status": "passed",
+    "release_tests_run": 959,
+    "release_tests_skipped": 4,
+    "release_tests_failed": 0,
+    "comfyui_tests_run": 25,
+    "archive_retest": "passed",
+    "historical_full_model_preflight": "1.0.0 passed",
+    "historical_resource_matrix_20260901": "23_of_23_passed",
+    "release_test_seconds": 146.860,
+    "comfyui_tests_failed": 0,
+    "archive_release_tests_run": 959,
+    "archive_release_tests_skipped": 4,
+    "archive_release_tests_failed": 0,
+    "archive_release_test_seconds": 141.459,
+    "archive_comfyui_tests_run": 25,
+    "archive_comfyui_tests_failed": 0
   },
   "weights_in_repository": false,
-  "generated_media_in_repository": false
+  "generated_media_in_repository": true,
+  "generated_media_policy": "two public effect-comparison demo assets only"
 }

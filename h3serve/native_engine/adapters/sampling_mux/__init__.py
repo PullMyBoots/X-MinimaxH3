@@ -17,6 +17,7 @@ from .samplers import (
     create_sampler,
 )
 from .scheduler import (
+    comfy_denoise_tail_sigma_schedule,
     H3LatentGeometry,
     H3SimpleScheduler,
     SamplingPlan,
@@ -39,6 +40,7 @@ __all__ = [
     "TurboAVSampler",
     "TurboClockMode",
     "create_sampler",
+    "comfy_denoise_tail_sigma_schedule",
     "normalize_h3_audio_loudness",
     "probe_media",
     "probe_media_metadata",

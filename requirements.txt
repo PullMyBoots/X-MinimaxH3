@@ -3,7 +3,9 @@ Pillow>=11,<13
 huggingface-hub>=0.34,<2
 safetensors>=0.7,<1
 numpy>=2.2,<3
+opencv-python-headless>=4.10,<5
 scipy>=1.15,<1.16
+webrtcvad-wheels==2.0.14
 av>=17,<18
 diffusers==0.35.2
 einops>=0.8,<1

@@ -365,7 +365,14 @@ class FusedQKVAttention(nn.Module):
         segment_prefix = int(modulation_segments[-1][0])
         layout_prefix = current_attention_protected_prefix()
         protected_tokens = layout_prefix if layout_prefix > 0 else segment_prefix
-        if layout_prefix > 0 and layout_prefix != segment_prefix:
+        # A native continuation adds one clean-timestep generated-video run
+        # before the noisy suffix.  In that case the sparse protected boundary
+        # is the start of the final run, not necessarily the start of the
+        # complete generated-video modality.  Requiring an actual modulation
+        # boundary retains the stale-layout guard without hard-coding a single
+        # video run.
+        modulation_boundaries = {int(start) for start, _, _ in modulation_segments}
+        if layout_prefix > 0 and layout_prefix not in modulation_boundaries:
             raise ValueError(
                 "packed layout prefix does not match the generated-video "
                 "modulation segment"
@@ -1121,6 +1128,13 @@ class H3TransformerBlock(nn.Module):
                 gate_a,
                 modulation_segments,
             )
+        # The norm1 output is dead once the Attention residual has been
+        # accumulated into ``value``.  Keeping this long-sequence tensor alive
+        # while Python evaluates the norm2 call overlaps two full hidden-state
+        # allocations (about 1 GiB at 720p/15s).  That unnecessary overlap can
+        # breach the intentional 7.25-GiB allocator ceiling even though the
+        # Attention and MLP phases each fit independently.
+        del hidden
         hidden = rms_adaln(
             value, self.norm2, shift_m, scale_m, modulation_segments
         )

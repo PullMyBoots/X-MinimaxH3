@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import json
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -16,10 +17,19 @@ FPS = 24
 RESOLUTIONS = {
     "360p": 360,
     "480p": 480,
+    "540p": 540,
     "720p": 720,
+    "900p": 900,
     "1080p": 1080,
     "2k": 1440,
 }
+GENERATION_RESOLUTION_MIN = 360
+GENERATION_RESOLUTION_MAX = 1080
+GENERATION_RESOLUTION_DETENTS = (360, 480, 540, 720, 900, 1080)
+PROGRESSIVE_RESOLUTION_MAX = 1440
+PROGRESSIVE_RESOLUTION_DETENTS = (
+    360, 480, 540, 720, 900, 1080, 1220, 1440,
+)
 ASPECT_RATIOS = {
     "1:1": (1, 1),
     "4:3": (4, 3),
@@ -51,10 +61,11 @@ EXECUTION_MODES = ("complete", "checkpoint")
 # every accepted value onto the unified device-budget optimizer.
 MEMORY_MODES = ("auto",)
 LEGACY_MEMORY_MODES = ("auto", "performance", "low_vram")
-SECOND_SAMPLING_RESOLUTIONS = ("720p", "1080p", "2k")
+SECOND_SAMPLING_RESOLUTIONS = ("720p", "900p", "1080p", "1220p", "2k")
 SECOND_SAMPLING_STEPS = (1, 8)
 SECOND_SAMPLING_DENOISE = (0.05, 0.50)
 SECOND_SAMPLING_TEMPORAL_WINDOW_FRAMES = (68, 362)
+SELFLIFT_SIGMA_SCALE = (0.25, 1.0)
 SECOND_SAMPLING_STRENGTHS = {
     # Keep the author workflow's 0.20 operating point as the default.  The
     # upper bound stops at the community's commonly reported 0.30 repair
@@ -63,6 +74,21 @@ SECOND_SAMPLING_STRENGTHS = {
     "standard": 0.20,
     "enhance": 0.25,
     "strong": 0.30,
+}
+# Product UI policy: users choose the number of real refinement steps while
+# the service selects a conservative start point for that solver budget.  The
+# curve is anchored at the two common H3 community recipes (3--4 steps around
+# denoise 0.20) and only widens slowly after four steps so that choosing higher
+# quality cannot unexpectedly become a strong redraw.
+SECOND_SAMPLING_AUTO_DENOISE_BY_STEPS = {
+    1: 0.10,
+    2: 0.15,
+    3: 0.20,
+    4: 0.20,
+    5: 0.22,
+    6: 0.23,
+    7: 0.24,
+    8: 0.25,
 }
 CHECKPOINT_PREVIEW_RESOLUTIONS = ("source", "360p", "480p", "720p")
 REFERENCE_MEDIA_RESOLUTIONS = ("original", "360p", "480p", "720p")
@@ -78,6 +104,7 @@ MAX_CUSTOM_DIMENSION = 2560
 MAX_CUSTOM_SHORT_EDGE = 1440
 MAX_CUSTOM_PIXELS = 2560 * 1440
 MAX_DURATION_SECONDS = 15
+MAX_LONG_HORIZON_DURATION_SECONDS = 60
 MAX_HIGH_RESOLUTION_DURATION_SECONDS = 15
 # The compact full-context route has completed a real 2K/15s H3 DiT checkpoint
 # step at 2560x1440 on the 362-frame grid.  The public spatial-temporal contract
@@ -100,7 +127,10 @@ RESOLUTION_MAX_DURATION_SECONDS = {
     )
     for resolution in RESOLUTIONS
 }
-UPSCALE_LEVELS = {"720p": 720, "1080p": 1080, "2k": 1440}
+UPSCALE_LEVELS = {
+    "720p": 720, "900p": 900, "1080p": 1080,
+    "1220p": 1220, "2k": 1440,
+}
 MIN_UPSCALE_DIMENSION = 256
 MAX_UPSCALE_DIMENSION = 3840
 MAX_UPSCALE_PIXELS = 3840 * 2160
@@ -113,8 +143,65 @@ def normalize_resolution_name(value: Any) -> str:
     return "2k" if resolution == "1440p" else resolution
 
 
+def generation_short_edge(value: Any) -> tuple[str, int]:
+    """Resolve a continuous first-generation short edge from 360P to 1080P."""
+
+    resolution = str(value).strip().lower()
+    if not resolution.endswith("p") or not resolution[:-1].isdigit():
+        raise ContractError(
+            "generation resolution must be between 360p and 1080p"
+        )
+    short_edge = int(resolution[:-1])
+    if not GENERATION_RESOLUTION_MIN <= short_edge <= GENERATION_RESOLUTION_MAX:
+        raise ContractError(
+            "generation resolution must be between 360p and 1080p"
+        )
+    return f"{short_edge}p", short_edge
+
+
+def progressive_short_edge(value: Any) -> tuple[str, int]:
+    """Resolve a SelfLift output canvas while keeping its first pass <=1080P."""
+
+    resolution = normalize_resolution_name(value)
+    if resolution == "2k":
+        return "2k", PROGRESSIVE_RESOLUTION_MAX
+    if not resolution.endswith("p") or not resolution[:-1].isdigit():
+        raise ContractError(
+            "progressive output resolution must be between 360p and 1440p"
+        )
+    short_edge = int(resolution[:-1])
+    if not GENERATION_RESOLUTION_MIN <= short_edge <= PROGRESSIVE_RESOLUTION_MAX:
+        raise ContractError(
+            "progressive output resolution must be between 360p and 1440p"
+        )
+    return f"{short_edge}p", short_edge
+
+
 def public_resolution_name(value: str) -> str:
     return "1440p" if value == "2k" else value
+
+
+def second_sampling_short_edge(value: Any) -> tuple[str, int]:
+    """Normalize one continuous 720P..1440P second-pass target."""
+
+    resolution = normalize_resolution_name(value)
+    if resolution == "2k":
+        return "2k", 1440
+    if not resolution.endswith("p"):
+        raise ContractError(
+            "second-sampling resolution must be between 720p and 1440p"
+        )
+    try:
+        short_edge = int(resolution[:-1])
+    except ValueError as error:
+        raise ContractError(
+            "second-sampling resolution must be between 720p and 1440p"
+        ) from error
+    if not 720 <= short_edge <= 1440:
+        raise ContractError(
+            "second-sampling resolution must be between 720p and 1440p"
+        )
+    return f"{short_edge}p", short_edge
 
 
 ORIGINAL_PRESETS: dict[str, dict[str, Any]] = {
@@ -235,7 +322,8 @@ def resolve_launcher(
     if vram_profile not in VRAM_PROFILES:
         raise ContractError(f"unsupported vram_profile: {vram_profile}")
     if (weight_tier, vram_profile) not in {
-        ("int8", "24gb"), ("int8", "16gb"), ("w4a8", "8gb")
+        ("int8", "24gb"), ("int8", "16gb"),
+        ("w4a8", "24gb"), ("w4a8", "16gb"), ("w4a8", "8gb"),
     }:
         raise ContractError(
             f"{weight_tier} weights do not support the {vram_profile} backend"
@@ -287,8 +375,8 @@ def _nearest_multiple(value: float, multiple: int = 32) -> int:
 def resolve_geometry(resolution: str, aspect_ratio: str) -> tuple[int, int]:
     try:
         short_edge = RESOLUTIONS[resolution]
-    except KeyError as error:
-        raise ContractError(f"unsupported resolution: {resolution}") from error
+    except KeyError:
+        resolution, short_edge = generation_short_edge(resolution)
     try:
         rw, rh = ASPECT_RATIOS[aspect_ratio]
     except KeyError as error:
@@ -300,6 +388,21 @@ def resolve_geometry(resolution: str, aspect_ratio: str) -> tuple[int, int]:
     else:
         raw_width = short_edge
         raw_height = short_edge * rh / rw
+    return _nearest_multiple(raw_width), _nearest_multiple(raw_height)
+
+
+def resolve_short_edge_geometry(
+    short_edge: int,
+    aspect_ratio: str,
+) -> tuple[int, int]:
+    try:
+        rw, rh = ASPECT_RATIOS[aspect_ratio]
+    except KeyError as error:
+        raise ContractError(f"unsupported aspect ratio: {aspect_ratio}") from error
+    if rw >= rh:
+        raw_width, raw_height = short_edge * rw / rh, short_edge
+    else:
+        raw_width, raw_height = short_edge, short_edge * rh / rw
     return _nearest_multiple(raw_width), _nearest_multiple(raw_height)
 
 
@@ -392,27 +495,32 @@ def resolve_upscale_geometry(
 
 @dataclass(frozen=True)
 class SecondSamplingSpec:
-    """Request-local H3 latent re-sampling controls.
+    """Request-local model-based high-resolution refinement controls.
 
     This is deliberately not folded into :class:`GenerationSpec`.  The first
     pass is a completed, selectable card; a second pass is a new job whose
-    input is that card's clean AV latent.  Keeping the contracts separate also
-    prevents the one-to-eight low-noise solver steps from being confused with
-    the five-to-thirty-step first-pass trajectory.
+    input is either that card's clean AV latent or its completed video. Keeping
+    the contracts separate prevents H3's one-to-eight low-noise solver steps
+    from being confused with the one-step temporal video-diffusion route.
     """
 
     resolution: str
     width: int
     height: int
-    steps: int = 1
+    # ``h3`` is retained for persisted jobs and API clients.  ``temporal``
+    # runs the one-step video-diffusion restoration path, which is designed
+    # for small faces and repeated background detail across adjacent frames.
+    method: str = "h3"
+    steps: int = 4
     acceleration: float = 75.0
     denoise: float = 0.20
-    strength: str = "standard"
+    strength: str = "auto"
     model_variant: str = "base"
     memory_mode: str = "auto"
     spatial_mode: str = "learned_3d"
     preserve_audio: bool = True
     temporal_window_frames: int | None = None
+    temporal_overlap_frames: int | None = None
 
     @classmethod
     def from_mapping(
@@ -421,21 +529,29 @@ class SecondSamplingSpec:
         *,
         source: "GenerationSpec",
     ) -> "SecondSamplingSpec":
-        resolution = normalize_resolution_name(
+        method = str(payload.get("method", "h3")).strip().lower()
+        method = {
+            "flashvsr": "temporal",
+            "temporal_diffusion": "temporal",
+            "native": "h3",
+        }.get(method, method)
+        if method not in {"h3", "temporal"}:
+            raise ContractError(
+                "second-sampling method must be h3 or temporal"
+            )
+
+        resolution, short_edge = second_sampling_short_edge(
             payload.get("resolution", "1080p")
         )
-        if resolution not in SECOND_SAMPLING_RESOLUTIONS:
-            raise ContractError(
-                "second-sampling resolution must be 720p, 1080p or 1440p"
-            )
 
         # Named H3 canvases use the same 32-pixel geometry as first-pass
         # generation.  Advanced/custom sources retain their actual pixel ratio
         # instead of trusting a possibly stale UI aspect-ratio label.
         if not source.advanced and source.aspect_ratio in ASPECT_RATIOS:
-            width, height = resolve_geometry(resolution, source.aspect_ratio)
+            width, height = resolve_short_edge_geometry(
+                short_edge, source.aspect_ratio
+            )
         else:
-            short_edge = RESOLUTIONS[resolution]
             if source.width >= source.height:
                 height = _nearest_multiple(short_edge)
                 width = _nearest_multiple(short_edge * source.width / source.height)
@@ -449,7 +565,7 @@ class SecondSamplingSpec:
         validate_native_spatiotemporal_budget(width, height, source.frames)
 
         try:
-            steps = int(payload.get("steps", 1))
+            steps = int(payload.get("steps", 4))
         except (TypeError, ValueError) as error:
             raise ContractError("second-sampling steps must be an integer") from error
         if not SECOND_SAMPLING_STEPS[0] <= steps <= SECOND_SAMPLING_STEPS[1]:
@@ -469,11 +585,16 @@ class SecondSamplingSpec:
             )
 
         strength_value = payload.get("strength")
-        if strength_value in (None, ""):
-            # Preserve old API clients while projecting their continuous value
-            # onto the new four-point product contract.
+        if strength_value in (None, "") and payload.get("denoise") in (None, ""):
+            # The product surface exposes steps only.  Keep the actual redraw
+            # strength deterministic and persisted with the resulting job.
+            strength = "auto"
+            denoise = SECOND_SAMPLING_AUTO_DENOISE_BY_STEPS[steps]
+        elif strength_value in (None, ""):
+            # Preserve older API clients that supplied a continuous denoise
+            # value before the automatic product policy was introduced.
             try:
-                legacy_denoise = float(payload.get("denoise", 0.20))
+                legacy_denoise = float(payload["denoise"])
             except (TypeError, ValueError) as error:
                 raise ContractError("second-sampling denoise must be numeric") from error
             if not math.isfinite(legacy_denoise) or not (
@@ -490,20 +611,27 @@ class SecondSamplingSpec:
                     SECOND_SAMPLING_STRENGTHS[name] - legacy_denoise
                 ),
             )
+            denoise = SECOND_SAMPLING_STRENGTHS[strength]
         else:
             strength = str(strength_value).strip().lower()
             if strength not in SECOND_SAMPLING_STRENGTHS:
                 raise ContractError(
                     "second-sampling strength must be preserve, standard, enhance or strong"
                 )
-        denoise = SECOND_SAMPLING_STRENGTHS[strength]
+            denoise = SECOND_SAMPLING_STRENGTHS[strength]
 
         requested_variant = str(payload.get("model_variant", "base")).strip().lower()
-        if requested_variant != "base":
+        if requested_variant not in {"base", "lora"}:
+            raise ContractError("second-sampling model_variant must be base or lora")
+        if method == "temporal" and requested_variant != "base":
             raise ContractError(
-                "H3 second sampling uses the Base weights only; LoRA is not supported"
+                "temporal second sampling does not use H3 LoRA weights"
             )
-        model_variant = "base"
+        if method == "h3" and requested_variant == "lora" and steps < 4:
+            raise ContractError(
+                "H3 LoRA second sampling requires at least four distilled steps"
+            )
+        model_variant = requested_variant if method == "h3" else "base"
 
         raw_window = payload.get("temporal_window_frames")
         if raw_window in (None, "", "auto", 0, "0"):
@@ -523,19 +651,47 @@ class SecondSamplingSpec:
                 raise ContractError(
                     "second-sampling temporal window must be between 68 and 362 frames"
                 )
+        raw_overlap = payload.get("temporal_overlap_frames")
+        if raw_overlap in (None, "", "auto"):
+            temporal_overlap_frames = None
+        else:
+            try:
+                temporal_overlap_frames = int(raw_overlap)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    "second-sampling temporal overlap must be an integer frame count"
+                ) from error
+            if temporal_overlap_frames < 0:
+                raise ContractError(
+                    "second-sampling temporal overlap must not be negative"
+                )
+            if (
+                temporal_window_frames is not None
+                and temporal_overlap_frames >= temporal_window_frames
+            ):
+                raise ContractError(
+                    "second-sampling temporal overlap must be shorter than its window"
+                )
 
         memory_mode = _unified_memory_policy(payload)
         return cls(
             resolution=resolution,
             width=width,
             height=height,
+            method=method,
             steps=steps,
             acceleration=round(acceleration, 1),
             denoise=round(denoise, 3),
             strength=strength,
             model_variant=model_variant,
             memory_mode=memory_mode,
+            spatial_mode=(
+                "temporal_diffusion_1step"
+                if method == "temporal"
+                else "learned_3d"
+            ),
             temporal_window_frames=temporal_window_frames,
+            temporal_overlap_frames=temporal_overlap_frames,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -543,6 +699,7 @@ class SecondSamplingSpec:
             "resolution": self.resolution,
             "width": self.width,
             "height": self.height,
+            "method": self.method,
             "steps": self.steps,
             "acceleration": self.acceleration,
             "denoise": self.denoise,
@@ -552,6 +709,166 @@ class SecondSamplingSpec:
             "spatial_mode": self.spatial_mode,
             "preserve_audio": self.preserve_audio,
             "temporal_window_frames": self.temporal_window_frames,
+            "temporal_overlap_frames": self.temporal_overlap_frames,
+        }
+
+
+# H3's validated custom-canvas contract starts at 192 px and requires 32-px
+# alignment. Users choose one square canvas and one complete square cell grid;
+# eligibility guarantees at least 1.5x enlargement inside each cell.
+VIDEO_REPAIR_CANVAS_RANGE = (192, 1088)
+VIDEO_REPAIR_CAPACITIES = (1, 4, 9, 16)
+VIDEO_REPAIR_MINIMUM_MAGNIFICATION = 1.5
+# Face restoration uses ComfyUI-H3-FaceRefine-Accelerated's dedicated
+# LightX2V four-step adapter and BasicScheduler tail.
+VIDEO_REPAIR_STEPS = 4
+
+
+def automatic_face_repair_window_seconds(canvas_size: int) -> float:
+    """Choose the internal temporal cap from the square repair canvas.
+
+    H3 canvases are aligned to 32 pixels, so nominal 540P and 720P settings
+    are represented by 544 and 736 pixels respectively.
+    """
+
+    canvas_size = int(canvas_size)
+    if canvas_size <= 576:
+        return 15.0
+    if canvas_size <= 768:
+        return 10.0
+    return 6.0
+
+
+def automatic_face_repair_layout(capacity: int, canvas_size: int) -> tuple[int, int]:
+    """Return the exact square grid and square canvas selected by the user."""
+
+    if capacity not in VIDEO_REPAIR_CAPACITIES:
+        raise ContractError("video repair capacity must be 1, 4, 9 or 16")
+    grid = int(math.isqrt(capacity))
+    return grid, int(canvas_size)
+
+
+@dataclass(frozen=True)
+class VideoRepairSpec:
+    """Pixel-video based local H3 repair submitted from a completed card.
+
+    The source is the delivered video, so this task remains available after
+    latent-cache cleanup. Difficult square crops are enlarged into one square
+    atlas and processed with the dedicated LightX2V four-step Turbo adapter.
+    """
+
+    # Face repair is the only public product route. The square canvas and its
+    # square cell capacity are global defaults. The four-step Turbo solver is
+    # fixed; a task only chooses acceleration.
+    mode: str = "face"
+    max_faces: int = 4
+    canvas_size: int = 768
+    grid_size: int = 2
+    steps: int = 4
+    acceleration: float = 50.0
+    minimum_window_seconds: float = 4.0
+    window_seconds: float = 6.0
+    overlap_seconds: float = 0.2
+    model_variant: str = "lora"
+    preserve_audio: bool = True
+
+    @classmethod
+    def from_mapping(cls, payload: dict[str, Any]) -> "VideoRepairSpec":
+        # ``max_faces`` remains an API alias for older clients. New callers use
+        # capacity, which must describe a complete square Atlas grid.
+        legacy_grid = payload.get("grid_size")
+        try:
+            legacy_capacity = int(legacy_grid) ** 2 if legacy_grid is not None else 4
+        except (TypeError, ValueError) as error:
+            raise ContractError("video repair grid_size must be an integer") from error
+        raw_max_faces = payload.get("capacity", payload.get("max_faces", legacy_capacity))
+        try:
+            max_faces = int(raw_max_faces)
+        except (TypeError, ValueError) as error:
+            raise ContractError("video repair capacity must be an integer") from error
+        if max_faces not in VIDEO_REPAIR_CAPACITIES:
+            raise ContractError("video repair capacity must be 1, 4, 9 or 16")
+        try:
+            canvas_size = int(payload.get("canvas_size", 768))
+        except (TypeError, ValueError) as error:
+            raise ContractError("video repair canvas_size must be an integer") from error
+        if not VIDEO_REPAIR_CANVAS_RANGE[0] <= canvas_size <= VIDEO_REPAIR_CANVAS_RANGE[1]:
+            raise ContractError("video repair canvas_size must be between 192 and 1088")
+        if canvas_size % 32:
+            raise ContractError("video repair canvas_size must be divisible by 32")
+        grid_size, canvas_size = automatic_face_repair_layout(
+            max_faces, canvas_size
+        )
+        try:
+            acceleration = float(payload.get("acceleration", 50.0))
+        except (TypeError, ValueError) as error:
+            raise ContractError("video repair acceleration must be numeric") from error
+        if not math.isfinite(acceleration) or not (
+            ACCELERATION_RANGE[0] <= acceleration <= ACCELERATION_RANGE[1]
+        ):
+            raise ContractError("video repair acceleration must be between 0 and 100")
+        # Windowing is deliberately internal. Smaller Atlases can keep more
+        # temporal context without the cost and memory pressure of a 1080P
+        # Atlas. The canvas tier is the single source of truth, including when
+        # an older persisted job still contains the former 4--6 second values.
+        minimum_window_seconds = 4.0
+        window_seconds = automatic_face_repair_window_seconds(canvas_size)
+        return cls(
+            mode="face",
+            max_faces=max_faces,
+            canvas_size=canvas_size,
+            grid_size=grid_size,
+            steps=VIDEO_REPAIR_STEPS,
+            acceleration=round(acceleration, 2),
+            minimum_window_seconds=round(minimum_window_seconds, 3),
+            window_seconds=round(window_seconds, 3),
+        )
+
+    @property
+    def maximum_regions(self) -> int:
+        return self.max_faces
+
+    @property
+    def cell_size(self) -> int:
+        # Match the Atlas builder's 8-pixel cell alignment exactly so the
+        # 1.5x eligibility promise also holds for 3x3 layouts.
+        return (self.canvas_size // self.grid_size) // 8 * 8
+
+    @property
+    def source_crop_size(self) -> int:
+        # A candidate is eligible only when its full 2.5x face crop fits this
+        # bound and therefore gains at least 1.5x inside one Atlas cell.
+        return max(8, int(math.floor(
+            self.cell_size / VIDEO_REPAIR_MINIMUM_MAGNIFICATION
+        )))
+
+    def atlas_layout(self, detected_faces: int) -> tuple[int, int]:
+        del detected_faces
+        return self.grid_size, self.canvas_size
+
+    @property
+    def denoise(self) -> float:
+        # Published accelerated workflow: BasicScheduler(simple), denoise .55.
+        return 0.55
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "capacity": self.max_faces,
+            "max_faces": self.max_faces,
+            "canvas_size": self.canvas_size,
+            "grid_size": self.grid_size,
+            "minimum_magnification": VIDEO_REPAIR_MINIMUM_MAGNIFICATION,
+            "layout_policy": "fixed_square_cells",
+            "window_policy": "automatic_canvas_tier",
+            "steps": self.steps,
+            "acceleration": self.acceleration,
+            "denoise": self.denoise,
+            "minimum_window_seconds": self.minimum_window_seconds,
+            "window_seconds": self.window_seconds,
+            "overlap_seconds": self.overlap_seconds,
+            "model_variant": self.model_variant,
+            "preserve_audio": self.preserve_audio,
         }
 
 
@@ -593,6 +910,12 @@ class GenerationSpec:
     height: int
     frames: int
     actual_duration_seconds: float
+    # For ordinary requests this is ``None`` and ``frames`` is the complete
+    # output.  Long-horizon requests keep ``frames`` as the bounded opening
+    # window while this field records the exact assembled H3 timeline.
+    output_frames: int | None = None
+    # Canonical immutable JSON; opt-in authored window contract, independent of env.
+    long_video: str | None = None
     # Runtime provenance. W4A8 is the same H3 topology with a lower-bit base;
     # task-level Base/LoRA selection remains orthogonal to this field.
     weight_tier: str = "int8"
@@ -609,6 +932,29 @@ class GenerationSpec:
     # and legacy API clients; new UI/API requests set both fields together.
     sampling_steps: int | None = None
     acceleration: float | None = None
+    # Optional stage-local control for the formal tail after the green fork.
+    # Older clients omit it and retain one acceleration value for the whole
+    # trajectory. ``acceleration_transition_step`` is a one-based count of
+    # formal steps owned by the first pass.
+    second_pass_acceleration: float | None = None
+    acceleration_transition_step: int | None = None
+    # SelfLift progressive generation spends the early part of one Base or
+    # Larry trajectory on a smaller canvas, lifts the predicted clean H3
+    # latent, then completes the same trajectory on the requested canvas.
+    selflift_enabled: bool = False
+    selflift_initial_resolution: str = "540p"
+    # Number of completed low-resolution solver steps before the lift.  This
+    # is one-based at the public boundary (6 means steps 1..6 are low-res).
+    selflift_transition_step: int | None = None
+    # Optional bounded temporal views for the high-resolution SelfLift tail.
+    # This execution tiling is independent from authored/continuation windows.
+    selflift_temporal_window_enabled: bool = False
+    selflift_temporal_window_seconds: float = 5.0
+    selflift_temporal_overlap_seconds: float = 1.0
+    # Request-local scale applied to the formal high-resolution Sigma tail.
+    # 1.0 preserves the project's calibrated trajectory exactly; lower values
+    # constrain how far full-film second sampling may redraw the accepted film.
+    selflift_sigma_scale: float = 1.0
     # Persisted compatibility field. New requests always normalize to ``auto``
     # and the physical graph is selected only from the device VRAM budget.
     memory_mode: str = "auto"
@@ -644,6 +990,24 @@ class GenerationSpec:
         # ``prompt`` is the final model-facing text for REST/ComfyUI clients.
         # Validate it without rewriting it: callers may deliberately use
         # whitespace and section boundaries in an H3 prompt template.
+        long_video = None
+        if payload.get("long_video") is not None:
+            from .long_video import normalize_long_video, story_duration, compile_window_story
+            try:
+                long_video = normalize_long_video(payload["long_video"])
+                duration = story_duration(long_video)
+                supplied = payload.get("duration_seconds", payload.get("requested_duration_seconds"))
+                if supplied is not None and abs(float(supplied) - duration) > 1e-6:
+                    raise ValueError("duration_seconds must equal the sum of authored segment durations")
+                if payload.get("frames") not in (None, "") and payload.get("long_horizon") is not True:
+                    raise ValueError("explicit frames cannot be combined with long_video")
+                _, initial_preview = compile_window_story(long_video, seed=0)
+                payload = dict(payload)
+                payload.pop("frames", None)
+                payload["duration_seconds"] = duration
+                payload["prompt"] = initial_preview["windows"][0]["prompt"]
+            except (ValueError, TypeError) as error:
+                raise ContractError(str(error)) from error
         prompt = str(payload.get("prompt", ""))
         if not prompt.strip():
             raise ContractError("prompt is required")
@@ -662,7 +1026,15 @@ class GenerationSpec:
         else:
             engine = str(payload.get("engine", "original"))
         quality = str(payload.get("quality", "balanced"))
-        resolution = str(payload.get("resolution", "480p"))
+        requested_selflift = _boolean(payload.get("selflift_enabled", False))
+        raw_resolution = str(payload.get("resolution", "480p")).strip().lower()
+        if requested_selflift:
+            resolution, progressive_target_short_edge = progressive_short_edge(
+                raw_resolution
+            )
+        else:
+            resolution = normalize_resolution_name(raw_resolution)
+            progressive_target_short_edge = None
         aspect_ratio = str(payload.get("aspect_ratio", "16:9"))
         if engine not in ENGINES:
             raise ContractError(f"unsupported engine: {engine}")
@@ -737,14 +1109,14 @@ class GenerationSpec:
         preview_step_index = None
         if payload.get("preview_step_index") not in (None, "", "auto"):
             preview_step_index = _integer(payload, "preview_step_index")
-            if not 0 <= preview_step_index < (20 if engine_variant(engine) == "base" else 8):
+            if preview_step_index < 0:
                 raise ContractError("preview_step_index falls outside the supported schedule")
         try:
             preview_branch_steps = int(payload.get("preview_branch_steps", 2))
         except (TypeError, ValueError) as error:
             raise ContractError("preview_branch_steps must be an integer") from error
-        if not 1 <= preview_branch_steps <= 3:
-            raise ContractError("preview_branch_steps must be between 1 and 3")
+        if not 1 <= preview_branch_steps <= 30:
+            raise ContractError("preview_branch_steps must be between 1 and 30")
         preview_fast_finish = _boolean(payload.get("preview_fast_finish", False))
 
         execution_mode = str(
@@ -796,6 +1168,11 @@ class GenerationSpec:
                 raise ContractError("mode and advanced disagree")
         else:
             advanced = _boolean(payload.get("advanced", False))
+        if not math.isfinite(requested_duration) or not 1.0 <= requested_duration <= MAX_LONG_HORIZON_DURATION_SECONDS:
+            raise ContractError(
+                f"duration_seconds must be between 1 and {MAX_LONG_HORIZON_DURATION_SECONDS}"
+            )
+        long_horizon_output_frames = None
         if advanced:
             width = _integer(payload, "width")
             height = _integer(payload, "height")
@@ -803,9 +1180,14 @@ class GenerationSpec:
             # duration_seconds and let the service choose the legal 17*n+5
             # frame grid.  This keeps advanced mode useful without requiring
             # callers to understand H3's latent temporal layout.
-            if payload.get("frames") not in (None, ""):
+            explicit_frames = payload.get("frames") not in (None, "")
+            if explicit_frames:
                 frames = _integer(payload, "frames")
-            else:
+            elif long_video is not None:
+                # The authored compiler selects the request-local maximum
+                # physical window after geometry validation below.
+                frames = 5
+            elif requested_duration <= MAX_DURATION_SECONDS:
                 frames, _ = resolve_frames(requested_duration)
             if not (
                 MIN_CUSTOM_DIMENSION <= width <= MAX_CUSTOM_DIMENSION
@@ -823,21 +1205,64 @@ class GenerationSpec:
                 )
             if width * height > MAX_CUSTOM_PIXELS:
                 raise ContractError("custom canvas exceeds the validated native 2K pixel envelope")
-            if frames < 5 or frames > 362 or (frames - 5) % 17:
-                raise ContractError("frames must be 5..362 and satisfy 17*n+5")
-            requested_duration = frames / FPS
-            actual_duration = requested_duration
+            if long_video is not None:
+                actual_duration = requested_duration
+            elif explicit_frames or requested_duration <= MAX_DURATION_SECONDS:
+                if frames < 5 or frames > 362 or (frames - 5) % 17:
+                    raise ContractError("frames must be 5..362 and satisfy 17*n+5")
+                # Advanced mode persists the exact H3 grid as its public
+                # duration, preserving historical round-trip semantics.
+                requested_duration = frames / FPS
+                actual_duration = frames / FPS
+            else:
+                from .native_engine.long_horizon import plan_long_horizon
+
+                maximum_opening = max_frames_for_geometry(
+                    width, height, max_native_pixel_frames
+                )
+                try:
+                    long_plan = plan_long_horizon(
+                        requested_duration_seconds=requested_duration,
+                        prompt=prompt,
+                        seed=seed if "seed" in locals() else 0,
+                        maximum_opening_frames=maximum_opening,
+                    )
+                except ValueError as error:
+                    raise ContractError(str(error)) from error
+                frames = long_plan.segments[0].window_frames
+                actual_duration = long_plan.actual_duration_seconds
+                long_horizon_output_frames = long_plan.output_frames
             validate_native_spatiotemporal_budget(
                 width, height, frames, max_native_pixel_frames
             )
         else:
-            width, height = resolve_geometry(resolution, aspect_ratio)
+            if progressive_target_short_edge is None:
+                width, height = resolve_geometry(resolution, aspect_ratio)
+            else:
+                width, height = resolve_short_edge_geometry(
+                    progressive_target_short_edge, aspect_ratio
+                )
             if max_duration_by_preset is not None:
                 try:
+                    if resolution in max_duration_by_preset:
+                        limit_resolution = resolution
+                    else:
+                        if progressive_target_short_edge is not None:
+                            requested_short_edge = progressive_target_short_edge
+                        else:
+                            _, requested_short_edge = generation_short_edge(resolution)
+                        # Use the next higher configured stop. This preserves an
+                        # operator's conservative duration ceiling for every
+                        # continuous value between two editable preset rows.
+                        limit_resolution = next(
+                            name for name, short_edge in RESOLUTIONS.items()
+                            if short_edge >= requested_short_edge
+                            and name in max_duration_by_preset
+                        )
                     max_duration = float(
-                        max_duration_by_preset[resolution][aspect_ratio]
+                        max_duration_by_preset[limit_resolution][aspect_ratio]
                     )
-                except (KeyError, TypeError, ValueError) as error:
+                except (KeyError, StopIteration, TypeError, ValueError) as error:
                     raise ContractError(
                         f"missing configured limit for {resolution} {aspect_ratio}"
                     ) from error
@@ -845,21 +1270,78 @@ class GenerationSpec:
                 max_duration = max_duration_for_geometry(
                     width, height, max_native_pixel_frames
                 )
-            if requested_duration > max_duration:
-                raise ContractError(
-                    f"{resolution} {aspect_ratio} generation supports at most "
-                    f"{max_duration:.3f} seconds under the configured server limit"
+            if long_video is not None:
+                # Do not run the legacy free-text splitter for an authored
+                # timeline. The dedicated compiler below owns every split.
+                frames = 5
+                actual_duration = requested_duration
+            elif requested_duration <= MAX_DURATION_SECONDS:
+                if requested_duration > max_duration:
+                    raise ContractError(
+                        f"{resolution} {aspect_ratio} generation supports at most "
+                        f"{max_duration:.3f} seconds under the configured server limit"
+                    )
+                frames, actual_duration = resolve_frames(requested_duration)
+            else:
+                from .native_engine.long_horizon import plan_long_horizon
+
+                maximum_opening = min(
+                    max_frames_for_geometry(width, height, max_native_pixel_frames),
+                    resolve_frames(max_duration)[0],
                 )
-            frames, actual_duration = resolve_frames(requested_duration)
+                try:
+                    long_plan = plan_long_horizon(
+                        requested_duration_seconds=requested_duration,
+                        prompt=prompt,
+                        seed=0,
+                        maximum_opening_frames=maximum_opening,
+                    )
+                except ValueError as error:
+                    raise ContractError(str(error)) from error
+                frames = long_plan.segments[0].window_frames
+                actual_duration = long_plan.actual_duration_seconds
+                long_horizon_output_frames = long_plan.output_frames
             if max_duration_by_preset is None:
                 validate_native_spatiotemporal_budget(
                     width, height, frames, max_native_pixel_frames
                 )
 
+        if long_video is not None:
+            from .long_video import compile_window_story
+            try:
+                authored_plan, authored_preview = compile_window_story(
+                    long_video, seed=0,
+                    maximum_frames=min(
+                        max_frames_for_geometry(width, height, max_native_pixel_frames),
+                        resolve_frames(max_duration)[0] if not advanced else 362,
+                    ),
+                    service_family=engine_family(engine),
+                )
+            except ValueError as error:
+                raise ContractError(str(error)) from error
+            requested_duration = authored_plan.requested_duration_seconds
+            actual_duration = authored_plan.actual_duration_seconds
+            frames = round(authored_preview["effective_max_window_seconds"] * FPS)
+            long_horizon_output_frames = authored_plan.output_frames
+            prompt = authored_preview["windows"][0]["prompt"]
+            validate_native_spatiotemporal_budget(width, height, frames, max_native_pixel_frames)
+
         maximum_short_edge = resource_backend.maximum_short_edge
         maximum_pixels = resource_backend.maximum_pixels
+        progressive_level_values = tuple(
+            UPSCALE_LEVELS[level]
+            for level in resource_backend.second_sampling_levels
+            if level in UPSCALE_LEVELS
+        )
+        progressive_target_admitted = bool(
+            requested_selflift
+            and progressive_target_short_edge is not None
+            and progressive_level_values
+            and progressive_target_short_edge <= max(progressive_level_values)
+        )
         if (
             not allow_second_sampling_target
+            and not progressive_target_admitted
             and (
                 min(width, height) > maximum_short_edge
                 or width * height > maximum_pixels
@@ -881,12 +1363,26 @@ class GenerationSpec:
 
         sampling_steps = None
         acceleration = None
+        second_pass_acceleration = None
+        acceleration_transition_step = None
         joint_control_fields = tuple(
             name
             for name in ("sampling_steps", "acceleration")
             if payload.get(name) not in (None, "")
         )
         joint_controls = bool(joint_control_fields)
+        stage_control_fields = tuple(
+            name
+            for name in (
+                "second_pass_acceleration",
+                "acceleration_transition_step",
+            )
+            if payload.get(name) not in (None, "")
+        )
+        if stage_control_fields and not joint_controls:
+            raise ContractError(
+                "stage acceleration controls require sampling_steps and acceleration"
+            )
         if joint_controls and len(joint_control_fields) != 2:
             missing = "acceleration" if joint_control_fields == ("sampling_steps",) else "sampling_steps"
             raise ContractError(
@@ -927,6 +1423,24 @@ class GenerationSpec:
             ):
                 raise ContractError("acceleration must be between 0 and 100")
             acceleration = round(acceleration, 1)
+            raw_second_acceleration = payload.get(
+                "second_pass_acceleration", acceleration
+            )
+            try:
+                second_pass_acceleration = float(raw_second_acceleration)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    "second_pass_acceleration must be numeric"
+                ) from error
+            if not math.isfinite(second_pass_acceleration) or not (
+                ACCELERATION_RANGE[0]
+                <= second_pass_acceleration
+                <= ACCELERATION_RANGE[1]
+            ):
+                raise ContractError(
+                    "second_pass_acceleration must be between 0 and 100"
+                )
+            second_pass_acceleration = round(second_pass_acceleration, 1)
 
         total_solver_steps = (
             int(sampling_steps)
@@ -937,6 +1451,126 @@ class GenerationSpec:
                 else int(LORA_PRESETS[quality]["steps"])
             )
         )
+        if joint_controls:
+            raw_acceleration_transition = payload.get(
+                "acceleration_transition_step", total_solver_steps
+            )
+            try:
+                acceleration_transition_step = int(
+                    raw_acceleration_transition
+                )
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    "acceleration_transition_step must be an integer"
+                ) from error
+            if not 1 <= acceleration_transition_step <= total_solver_steps:
+                raise ContractError(
+                    "acceleration_transition_step must lie inside the formal trajectory"
+                )
+        if (
+            preview_step_index is not None
+            and preview_step_index >= total_solver_steps
+        ):
+            raise ContractError(
+                "preview_step_index falls outside the supported schedule"
+            )
+        selflift_enabled = requested_selflift
+        selflift_initial_resolution = str(
+            payload.get("selflift_initial_resolution", "540p")
+        ).strip().lower()
+        selflift_transition_step = None
+        selflift_temporal_window_enabled = _boolean(
+            payload.get("selflift_temporal_window_enabled", False)
+        )
+        try:
+            selflift_temporal_window_seconds = float(
+                payload.get("selflift_temporal_window_seconds", 5.0)
+            )
+        except (TypeError, ValueError) as error:
+            raise ContractError(
+                "SelfLift temporal window seconds must be numeric"
+            ) from error
+        if not math.isfinite(selflift_temporal_window_seconds) or not (
+            3.0 <= selflift_temporal_window_seconds <= 15.0
+        ):
+            raise ContractError(
+                "SelfLift temporal window seconds must be between 3 and 15"
+            )
+        selflift_temporal_window_seconds = round(
+            selflift_temporal_window_seconds, 1
+        )
+        try:
+            selflift_temporal_overlap_seconds = float(
+                payload.get("selflift_temporal_overlap_seconds", 1.0)
+            )
+        except (TypeError, ValueError) as error:
+            raise ContractError(
+                "SelfLift temporal overlap seconds must be numeric"
+            ) from error
+        if not math.isfinite(selflift_temporal_overlap_seconds) or not (
+            0.0 <= selflift_temporal_overlap_seconds <= 4.0
+        ):
+            raise ContractError(
+                "SelfLift temporal overlap seconds must be between 0 and 4"
+            )
+        selflift_temporal_overlap_seconds = round(
+            selflift_temporal_overlap_seconds, 1
+        )
+        try:
+            selflift_sigma_scale = float(
+                payload.get("selflift_sigma_scale", 1.0)
+            )
+        except (TypeError, ValueError) as error:
+            raise ContractError("SelfLift sigma scale must be numeric") from error
+        if not math.isfinite(selflift_sigma_scale) or not (
+            SELFLIFT_SIGMA_SCALE[0]
+            <= selflift_sigma_scale
+            <= SELFLIFT_SIGMA_SCALE[1]
+        ):
+            raise ContractError(
+                "SelfLift sigma scale must be between 0.25 and 1"
+            )
+        selflift_sigma_scale = round(selflift_sigma_scale, 2)
+        if selflift_enabled:
+            if not joint_controls:
+                raise ContractError("SelfLift requires sampling_steps and acceleration")
+            if long_video is not None:
+                raise ContractError("SelfLift is not available for transparent long-horizon generation")
+            _, initial_short_edge = generation_short_edge(
+                selflift_initial_resolution
+            )
+            initial_width, initial_height = resolve_short_edge_geometry(
+                initial_short_edge, aspect_ratio
+            )
+            if initial_width > width or initial_height > height:
+                raise ContractError(
+                    "SelfLift initial resolution cannot exceed the output resolution"
+                )
+            raw_transition = payload.get("selflift_transition_step")
+            selflift_transition_step = (
+                max(1, total_solver_steps - 2)
+                if raw_transition in (None, "", "auto")
+                else _integer(payload, "selflift_transition_step")
+            )
+            if not 1 <= selflift_transition_step < total_solver_steps:
+                raise ContractError(
+                    "SelfLift transition step must leave at least one high-resolution step"
+                )
+            if payload.get("acceleration_transition_step") in (None, ""):
+                acceleration_transition_step = selflift_transition_step
+            elif acceleration_transition_step != selflift_transition_step:
+                raise ContractError(
+                    "SelfLift and acceleration must use the same transition step"
+                )
+        if long_horizon_output_frames is not None:
+            if execution_mode != "complete":
+                raise ContractError(
+                    "checkpoint execution is not available for transparent long-horizon generation"
+                )
+            if preview_mode != "off":
+                raise ContractError(
+                    "intermediate preview is not available for transparent long-horizon generation"
+                )
         if (
             not joint_controls
             and advanced
@@ -954,6 +1588,11 @@ class GenerationSpec:
                 raise ContractError(
                     "checkpoint tasks must retain state, generate a preview, or both"
                 )
+            if selflift_enabled:
+                if checkpoint_step != selflift_transition_step:
+                    raise ContractError(
+                        "a SelfLift checkpoint must stop at the resolution transition"
+                    )
             if checkpoint_preview_resolution != "source":
                 # Product resolution labels are nominal; every public canvas
                 # is aligned to the nearest 32 pixels (360p becomes 352).
@@ -1072,6 +1711,8 @@ class GenerationSpec:
             height=height,
             frames=frames,
             actual_duration_seconds=actual_duration,
+            output_frames=long_horizon_output_frames,
+            long_video=long_video,
             weight_tier=weight_tier,
             vram_profile=vram_profile,
             advanced=advanced,
@@ -1081,6 +1722,21 @@ class GenerationSpec:
             sparse_scope=sparse_scope,
             sampling_steps=sampling_steps,
             acceleration=acceleration,
+            second_pass_acceleration=second_pass_acceleration,
+            acceleration_transition_step=acceleration_transition_step,
+            selflift_enabled=selflift_enabled,
+            selflift_initial_resolution=selflift_initial_resolution,
+            selflift_transition_step=selflift_transition_step,
+            selflift_temporal_window_enabled=(
+                selflift_temporal_window_enabled
+            ),
+            selflift_temporal_window_seconds=(
+                selflift_temporal_window_seconds
+            ),
+            selflift_temporal_overlap_seconds=(
+                selflift_temporal_overlap_seconds
+            ),
+            selflift_sigma_scale=selflift_sigma_scale,
             memory_mode=memory_mode,
             upscale_enabled=upscale_enabled,
             upscale_resolution=upscale_resolution,
@@ -1141,6 +1797,8 @@ class GenerationSpec:
                 "steps": self.sampling_steps,
                 "sampling_steps": self.sampling_steps,
                 "acceleration": self.acceleration,
+                "second_pass_acceleration": self.second_pass_acceleration,
+                "acceleration_transition_step": self.acceleration_transition_step,
                 "joint_acceleration": True,
                 "advanced": True,
             })
@@ -1169,12 +1827,28 @@ class GenerationSpec:
             "width": self.width,
             "height": self.height,
             "frames": self.frames,
+            "output_frames": self.output_frames or self.frames,
             "fps": FPS,
             "seed": self.seed,
             "experimental_duration": self.requested_duration_seconds < 5,
+            "long_horizon": self.output_frames is not None,
+            **({"long_video": json.loads(self.long_video)} if self.long_video is not None else {}),
             "advanced": self.advanced,
             "mode": "advanced" if self.advanced else "preset",
             "memory_mode": self.memory_mode,
+            "selflift_enabled": self.selflift_enabled,
+            "selflift_initial_resolution": self.selflift_initial_resolution,
+            "selflift_transition_step": self.selflift_transition_step,
+            "selflift_temporal_window_enabled": (
+                self.selflift_temporal_window_enabled
+            ),
+            "selflift_temporal_window_seconds": (
+                self.selflift_temporal_window_seconds
+            ),
+            "selflift_temporal_overlap_seconds": (
+                self.selflift_temporal_overlap_seconds
+            ),
+            "selflift_sigma_scale": self.selflift_sigma_scale,
             "preview_mode": self.preview_mode,
             "preview_step_index": self.preview_step_index,
             "preview_branch_steps": self.preview_branch_steps,
@@ -1196,6 +1870,10 @@ class GenerationSpec:
         if self.joint_acceleration_enabled:
             result["sampling_steps"] = self.sampling_steps
             result["acceleration"] = self.acceleration
+            result["second_pass_acceleration"] = self.second_pass_acceleration
+            result["acceleration_transition_step"] = (
+                self.acceleration_transition_step
+            )
         elif self.advanced:
             result["attention_keep_ratio"] = self.attention_keep_ratio
             result["sparse_scope"] = self.sparse_scope
@@ -1327,11 +2005,26 @@ def public_options(
             "lora": {"label": "LoRA 极速", "presets": _public_presets(LORA_PRESETS)},
         },
         "resolutions": list(RESOLUTIONS),
+        "resolution": {
+            "min": GENERATION_RESOLUTION_MIN,
+            "max": GENERATION_RESOLUTION_MAX,
+            "step": 1,
+            "detents": list(GENERATION_RESOLUTION_DETENTS),
+        },
+        "progressive_resolution": {
+            "min": GENERATION_RESOLUTION_MIN,
+            "max": PROGRESSIVE_RESOLUTION_MAX,
+            "first_pass_max": GENERATION_RESOLUTION_MAX,
+            "step": 1,
+            "detents": list(PROGRESSIVE_RESOLUTION_DETENTS),
+        },
         "aspect_ratios": list(ASPECT_RATIOS),
         "geometry": geometry,
         "duration": {
             "min": 1,
-            "max": MAX_DURATION_SECONDS,
+            "max": MAX_LONG_HORIZON_DURATION_SECONDS,
+            "native_window_max": MAX_DURATION_SECONDS,
+            "long_horizon_max": MAX_LONG_HORIZON_DURATION_SECONDS,
             "default": 5,
             "fps": FPS,
             "max_by_resolution": {
@@ -1417,6 +2110,21 @@ def public_options(
                     "75–100=明确允许质量风险的激进区"
                 ),
             },
+            "selflift": {
+                "available": True,
+                "model_variants": ["base", "lora"],
+                "initial_resolutions": ["360p", "480p", "540p", "720p", "900p"],
+                "default_initial_resolution": "540p",
+                "default_high_resolution_steps": 2,
+                "sigma_scale": {
+                    "min": SELFLIFT_SIGMA_SCALE[0],
+                    "max": SELFLIFT_SIGMA_SCALE[1],
+                    "step": 0.05,
+                    "default": 1.0,
+                },
+                "transition_semantics": "completed_low_resolution_steps",
+                "method": "learned_h3_clean_endpoint_lift_v1",
+            },
             "quality_protection": "internal_non_disableable",
             "legacy_execution_controls": {
                 "status": "accepted_for_persisted_clients_but_not_exposed",
@@ -1434,14 +2142,42 @@ def public_options(
                 "replacement": "h3_second_sampling",
             },
             "second_sampling": {
-                "implementation": "h3_learned_3d_second_sampling_v2",
+                "implementation": "dual_model_second_sampling_v3",
+                "default_method": "temporal",
+                "methods": {
+                    "temporal": {
+                        "implementation": "flashvsr_v1.1_tiny_long_1step",
+                        "input": "completed_video",
+                        "inference_steps": 1,
+                        "temporal": True,
+                    },
+                    "h3": {
+                        "implementation": "h3_learned_3d_second_sampling_v2",
+                        "input": "clean_av_latent",
+                        "inference_steps": "user_1_to_8",
+                        "temporal": True,
+                    },
+                },
                 "latent_initialization": "learned_3d_bf16",
                 "sampler": "sa_solver",
-                "levels": list(SECOND_SAMPLING_RESOLUTIONS),
+                "levels": [
+                    public_resolution_name(level)
+                    for level in SECOND_SAMPLING_RESOLUTIONS
+                ],
+                "resolution": {
+                    "min": 720,
+                    "max": 1440,
+                    "step": 1,
+                    "detents": [720, 900, 1080, 1220, 1440],
+                },
                 "steps": {
                     "min": SECOND_SAMPLING_STEPS[0],
                     "max": SECOND_SAMPLING_STEPS[1],
-                    "default": 1,
+                    "default": 4,
+                },
+                "automatic_denoise_by_steps": {
+                    str(steps): denoise
+                    for steps, denoise in SECOND_SAMPLING_AUTO_DENOISE_BY_STEPS.items()
                 },
                 "model_variants": ["base"],
                 "strengths": {

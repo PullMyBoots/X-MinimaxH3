@@ -7,7 +7,9 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
+import urllib.request
 
 
 ROOT = Path(__file__).resolve().parent
@@ -55,6 +57,22 @@ def _download_local_dir(
     )
 
 
+def _download_direct_url(target: Path, artifact: dict) -> Path:
+    """Download one immutable non-Hugging-Face artifact atomically."""
+
+    temporary = target.with_name(f".{target.name}.download")
+    temporary.unlink(missing_ok=True)
+    try:
+        with urllib.request.urlopen(artifact["url"], timeout=120) as response:
+            with temporary.open("wb") as output:
+                shutil.copyfileobj(response, output, length=16 * 1024 * 1024)
+        temporary.replace(target)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return target
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -64,7 +82,10 @@ def main() -> None:
     parser.add_argument(
         "--accept-model-license",
         action="store_true",
-        help="确认你已阅读并接受 MiniMax H3 Community License 与 LoRA 许可证。",
+        help=(
+            "确认你已阅读并接受 MiniMax H3 Community License、LoRA 许可证"
+            "以及 FlashVSR/FlashVSR-v1.1 Apache-2.0 许可证。"
+        ),
     )
     parser.add_argument("--base-only", action="store_true")
     parser.add_argument("--reference-only", action="store_true")
@@ -100,17 +121,22 @@ def main() -> None:
         target = model_root / artifact["install_path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         if not args.verify_only:
-            print(
-                f"下载 {artifact['repo']}@{artifact['revision']}/{artifact['filename']}",
-                flush=True,
+            source = (
+                artifact["url"]
+                if "url" in artifact
+                else f"{artifact['repo']}@{artifact['revision']}/{artifact['filename']}"
             )
-            local_dir = _download_local_dir(model_root, target, artifact)
-            downloaded = Path(hf_hub_download(
-                repo_id=artifact["repo"],
-                revision=artifact["revision"],
-                filename=artifact["filename"],
-                local_dir=local_dir,
-            ))
+            print(f"下载 {source}", flush=True)
+            if "url" in artifact:
+                downloaded = _download_direct_url(target, artifact)
+            else:
+                local_dir = _download_local_dir(model_root, target, artifact)
+                downloaded = Path(hf_hub_download(
+                    repo_id=artifact["repo"],
+                    revision=artifact["revision"],
+                    filename=artifact["filename"],
+                    local_dir=local_dir,
+                ))
             if downloaded.resolve() != target.resolve():
                 raise SystemExit(f"下载器返回了非预期路径：{downloaded} != {target}")
         _verify(target, artifact)

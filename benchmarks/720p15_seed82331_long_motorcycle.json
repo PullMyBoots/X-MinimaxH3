@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "purpose": "Held-out long-horizon V19 Pareto gate for high-speed motion, occlusion continuity and vehicle geometry. Prompt content is not a scheduler input.",
+  "visual_sample_seconds": [1.0, 3.5, 5.5, 7.5, 9.5, 11.5, 13.5, 14.8],
+  "scenarios": [
+    {
+      "name": "long_motorcycle_occlusion_seed82331",
+      "seed": 82331,
+      "width": 1280,
+      "height": 736,
+      "frames": 362,
+      "steps": 20,
+      "prompt": "integrated_multimodal_description: [Shot 1]\n写实电影质感的雨后现代城市夜景，一个15.083秒的连续追踪长镜头。全片只有同一名穿黑色皮夹克的女骑手（S1）与同一辆红色运动摩托车（V1），人物服装、脸部、车辆形状和行驶方向始终一致，不得切镜。\n\n0至4秒，摄影机在摩托车正前方同速倒退。S1沿湿滑道路直线加速，身体自然前倾，头发和衣摆连续受风，车轮转速、路面反光和周围车辆的相对速度与前进速度一致。\n\n4至8秒，一辆白色轿车从右侧平滑并线，部分挡住V1的路线。S1先轻微减速，再连续向左倾车并沿弧线绕过轿车；转向角、车身倾角、身体重心和运动轨迹必须互相一致，绝不能瞬间横移。\n\n8至12秒，摄影机降低到车轮高度并移动到侧前方。V1从两辆同向汽车之间的窄缝通过，骑手和摩托车短暂被车身遮挡；重新出现时，其身份、位置、速度、朝向、姿势和动量必须延续遮挡前状态。\n\n12至15.083秒，道路进入宽阔右弯。S1在弯心前逐渐向右压车，轮胎保持接触路面，随后平顺回正并继续驶向城市深处。不得漂浮、倒退、打滑、瞬移、变形或凭空换车。\n\noverall_soundscape: 与画面同步的摩托车发动机转速变化、轮胎压过湿路面的水声、风声、邻近汽车驶过声；全片无人说话，不得出现不可辨识人声。\n\nnon_diegetic_music: N/A",
+      "offload_mode": "block",
+      "mlp_chunk_tokens": 8192,
+      "prefetch_depth": 1,
+      "resident_block_count": 0,
+      "vae_tile_size": 288,
+      "vae_tile_batch_size": 1
+    }
+  ]
+}

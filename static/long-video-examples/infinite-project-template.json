@@ -1,0 +1,31 @@
+{
+  "final_acceleration": 75,
+  "windows": [
+    {
+      "prompt": "[Shot 1] Use <Picture 1> as this window's scene reference and <Picture 2> as this window's character reference. From local 00:00, establish the opening composition, action and exact ending state.",
+      "seed": "random",
+      "acceleration": 50,
+      "references": {
+        "Picture 1": {
+          "path": "/absolute/path/to/window-1-scene.png"
+        },
+        "Picture 2": {
+          "path": "/absolute/path/to/window-1-character.png"
+        }
+      }
+    },
+    {
+      "prompt": "[Shot 1] Continue the exact previous ending state without replay. Use this window's <Picture 1> and <Picture 2> references. Describe the next action and exact ending state.",
+      "seed": "random",
+      "acceleration": 50,
+      "references": {
+        "Picture 1": {
+          "path": "/absolute/path/to/window-2-scene.png"
+        },
+        "Picture 2": {
+          "path": "/absolute/path/to/window-2-character.png"
+        }
+      }
+    }
+  ]
+}

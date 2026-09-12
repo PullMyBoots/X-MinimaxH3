@@ -165,7 +165,10 @@ import PIL, comfy_kitchen, sageattention
 
   local development_main="${release_root}/../.."
   local development_minimax="${development_main}/MiniMax-H3"
-  local development_lightx="${release_root}/../../../backend-compare/sources/LightX2V"
+  local development_lightx="${development_main}/knowledge/projects/inference_frameworks/lightx2v"
+  if [[ ! -f "${development_lightx}/pyproject.toml" ]]; then
+    development_lightx="${release_root}/../../../backend-compare/sources/LightX2V"
+  fi
   if [[ ! -d "${release_root}/runtime/vendor/MiniMax-H3" && -d "${development_minimax}" ]]; then
     export H3_SERVE_MINIMAX_SOURCE="${H3_SERVE_MINIMAX_SOURCE:-${development_minimax}}"
   fi

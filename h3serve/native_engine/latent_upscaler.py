@@ -46,6 +46,43 @@ def _normalization(channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(32, channels)
 
 
+def _conv3d_with_static_time(
+    layer: nn.Conv3d,
+    value: torch.Tensor,
+    *,
+    static_time: bool,
+) -> torch.Tensor:
+    """Apply a 3D convolution with an infinite-static temporal boundary.
+
+    The released resizer mixes neighbouring H3 latent times.  For the
+    framewise research route each time slice is an independent batch item and
+    has length one.  Replicate-padding only the temporal axis makes every 3D
+    kernel see that slice as a static sequence, while retaining its learned
+    spatial/channel mapping exactly.
+    """
+
+    if not static_time:
+        return layer(value)
+    if int(value.shape[2]) != 1:
+        raise ValueError("static-time convolution requires one latent time slice")
+    pad_t, pad_h, pad_w = layer.padding
+    if pad_t:
+        value = F.pad(
+            value,
+            (0, 0, 0, 0, pad_t, pad_t),
+            mode="replicate",
+        )
+    return F.conv3d(
+        value,
+        layer.weight,
+        layer.bias,
+        stride=layer.stride,
+        padding=(0, pad_h, pad_w),
+        dilation=layer.dilation,
+        groups=layer.groups,
+    )
+
+
 class _ResBlockEmb3D(nn.Module):
     def __init__(self, channels: int, embedding_channels: int, dropout: float) -> None:
         super().__init__()
@@ -70,14 +107,27 @@ class _ResBlockEmb3D(nn.Module):
         nn.init.zeros_(self.out_layers[-1].bias)
         self.skip = nn.Identity()
 
-    def forward(self, value: torch.Tensor, embedding: torch.Tensor) -> torch.Tensor:
-        hidden = self.in_layers(value)
+    def forward(
+        self,
+        value: torch.Tensor,
+        embedding: torch.Tensor,
+        *,
+        static_time: bool = False,
+    ) -> torch.Tensor:
+        hidden = self.in_layers[1](self.in_layers[0](value))
+        hidden = _conv3d_with_static_time(
+            self.in_layers[2], hidden, static_time=static_time
+        )
         projected = self.emb_layers(embedding).to(hidden.dtype)
         while projected.ndim < hidden.ndim:
             projected = projected[..., None]
         scale, shift = projected.chunk(2, dim=1)
         hidden = self.out_norm(hidden) * (1 + scale) + shift
-        return self.skip(value) + self.out_layers(hidden)
+        hidden = self.out_layers[1](self.out_layers[0](hidden))
+        hidden = _conv3d_with_static_time(
+            self.out_layers[2], hidden, static_time=static_time
+        )
+        return self.skip(value) + hidden
 
 
 class _TemporalConv(nn.Module):
@@ -93,9 +143,17 @@ class _TemporalConv(nn.Module):
         )
         self.pwconv = nn.Conv3d(channels, channels, kernel_size=1)
 
-    def forward(self, value: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, value: torch.Tensor, *, static_time: bool = False
+    ) -> torch.Tensor:
         hidden = F.silu(self.norm(value))
-        return value + self.pwconv(self.dwconv(hidden))
+        hidden = _conv3d_with_static_time(
+            self.dwconv, hidden, static_time=static_time
+        )
+        hidden = _conv3d_with_static_time(
+            self.pwconv, hidden, static_time=static_time
+        )
+        return value + hidden
 
 
 class H3LatentResizer3D(nn.Module):
@@ -150,12 +208,18 @@ class H3LatentResizer3D(nn.Module):
         blocks: nn.ModuleList,
         value: torch.Tensor,
         embedding: torch.Tensor,
+        *,
+        static_time: bool = False,
     ) -> torch.Tensor:
         for block in blocks:
             if isinstance(block, _ResBlockEmb3D):
-                value = block(value, embedding.expand(value.shape[0], -1))
+                value = block(
+                    value,
+                    embedding.expand(value.shape[0], -1),
+                    static_time=static_time,
+                )
             else:
-                value = block(value)
+                value = block(value, static_time=static_time)
         return value
 
     def _forward_segment(
@@ -164,6 +228,7 @@ class H3LatentResizer3D(nn.Module):
         *,
         effective_scale: float,
         target_size: tuple[int, int, int],
+        static_time: bool = False,
     ) -> torch.Tensor:
         embedding = self.embed(
             torch.tensor(
@@ -172,12 +237,23 @@ class H3LatentResizer3D(nn.Module):
                 dtype=value.dtype,
             )
         )
-        hidden = self._run_blocks(self.in_blocks, self.conv_in(value), embedding)
+        hidden = _conv3d_with_static_time(
+            self.conv_in, value, static_time=static_time
+        )
+        hidden = self._run_blocks(
+            self.in_blocks, hidden, embedding, static_time=static_time
+        )
         hidden = F.interpolate(
             hidden, size=target_size, mode="trilinear", align_corners=False
         )
-        hidden = self._run_blocks(self.out_blocks, hidden, embedding)
-        return self.conv_out(F.silu(self.norm_out(hidden)))
+        hidden = self._run_blocks(
+            self.out_blocks, hidden, embedding, static_time=static_time
+        )
+        return _conv3d_with_static_time(
+            self.conv_out,
+            F.silu(self.norm_out(hidden)),
+            static_time=static_time,
+        )
 
     def forward(
         self,
@@ -243,6 +319,31 @@ class H3LatentResizer3D(nn.Module):
             weights[:, :, output_start:output_end] += shaped
         return output / weights.clamp_min(1e-8)
 
+    def forward_framewise_static(
+        self,
+        value: torch.Tensor,
+        *,
+        effective_scale: float,
+        target_size: tuple[int, int, int],
+    ) -> torch.Tensor:
+        """Resize each latent time independently with static temporal kernels."""
+
+        if int(target_size[0]) != int(value.shape[2]):
+            raise ValueError("framewise-static resizing preserves latent duration")
+        batch, channels, latent_times, height, width = value.shape
+        frame_batch = value.permute(0, 2, 1, 3, 4).reshape(
+            batch * latent_times, channels, 1, height, width
+        )
+        output = self._forward_segment(
+            frame_batch,
+            effective_scale=effective_scale,
+            target_size=(1, target_size[1], target_size[2]),
+            static_time=True,
+        )
+        return output.reshape(
+            batch, latent_times, channels, 1, target_size[1], target_size[2]
+        )[:, :, :, 0].permute(0, 2, 1, 3, 4).contiguous()
+
 
 def _detect_architecture(state: dict[str, torch.Tensor]) -> dict[str, int]:
     try:
@@ -295,7 +396,7 @@ def load_h3_latent_upscaler(checkpoint: Path) -> H3LatentResizer3D:
             if key.startswith("upscaler.")
         }
     model = H3LatentResizer3D(**_detect_architecture(state))
-    model.load_state_dict(state, strict=True)
+    model.load_state_dict(state, strict=True, assign=True)
     return model.to(dtype=torch.bfloat16).eval().requires_grad_(False)
 
 
@@ -306,6 +407,7 @@ def upscale_h3_video_latent(
     target_height: int,
     target_width: int,
     temporal_chunk_frames: int = 24,
+    temporal_mode: str = "joint_3d",
 ) -> torch.Tensor:
     """Return a learned spatial upscale on CPU with source dtype preserved."""
 
@@ -330,12 +432,21 @@ def upscale_h3_video_latent(
     )
     with torch.inference_mode():
         normalized = (value - mean) / std
-        output = model(
-            normalized,
-            effective_scale=float(effective_scale),
-            target_size=(latent.shape[2], target_height, target_width),
-            temporal_chunk_frames=temporal_chunk_frames,
-        )
+        if temporal_mode == "joint_3d":
+            output = model(
+                normalized,
+                effective_scale=float(effective_scale),
+                target_size=(latent.shape[2], target_height, target_width),
+                temporal_chunk_frames=temporal_chunk_frames,
+            )
+        elif temporal_mode == "framewise_static":
+            output = model.forward_framewise_static(
+                normalized,
+                effective_scale=float(effective_scale),
+                target_size=(latent.shape[2], target_height, target_width),
+            )
+        else:
+            raise ValueError(f"unsupported latent-upscaler temporal mode: {temporal_mode}")
         output = output * std + mean
     return output.to(device="cpu", dtype=source_dtype)
 

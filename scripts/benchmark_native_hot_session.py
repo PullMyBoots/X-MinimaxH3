@@ -4125,8 +4125,14 @@ def main() -> int:
         model.eval().requires_grad_(False)
         residency = ImmutablePinnedModuleResidency(
             "transformer", model,
-            pin_host_weights=memory_profile.pin_model_weights,
-            copy_host_weights=memory_profile.copy_model_weights,
+            pin_host_weights=(
+                memory_profile.pin_model_weights
+                or memory_profile.pin_transformer_weights
+            ),
+            copy_host_weights=(
+                memory_profile.copy_model_weights
+                or memory_profile.copy_transformer_weights
+            ),
         )
         residency.prepare_host()
         return residency

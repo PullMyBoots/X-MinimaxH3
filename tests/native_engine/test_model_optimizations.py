@@ -49,6 +49,7 @@ from h3serve.native_engine.model.kernels import (
     attention_protected_prefix,
     attention_sparsity,
     attention_step,
+    _write_compact_value_fp8,
 )
 from h3serve.native_engine.model.lora import (
     PrunedCurveAdaLN,
@@ -68,6 +69,31 @@ from h3serve.native_engine.model.packed import build_fl2va_layout, build_ref2va_
 
 
 class SegmentedModulationTests(unittest.TestCase):
+    def test_compact_value_writer_bounds_noncontiguous_split_copy(self) -> None:
+        fused_kv = torch.randn(64, 2, 256)
+        value_view = fused_kv[..., 128:]
+        self.assertFalse(value_view.is_contiguous())
+        captured: dict[str, torch.Tensor] = {}
+
+        def fake_write(target, source, value_absmax, **kwargs):
+            del target, value_absmax, kwargs
+            captured["source"] = source
+
+        with patch(
+            "h3serve.native_engine.model.compact_fp8.write_sage_fp8_slab",
+            side_effect=fake_write,
+        ):
+            _write_compact_value_fp8(
+                torch.empty(1),
+                value_view,
+                value_view.float().abs().amax(dim=0),
+                start=0,
+                layout="NHD",
+            )
+
+        self.assertTrue(captured["source"].is_contiguous())
+        torch.testing.assert_close(captured["source"], value_view)
+
     def test_forecast_history_storage_routes_long_geometry_only(self) -> None:
         self.assertEqual(
             forecast_history_storage_mode(
@@ -422,25 +448,26 @@ class SegmentedModulationTests(unittest.TestCase):
         attention.q_norm.weight.data.fill_(1.0)
         attention.k_norm.weight.data.fill_(1.0)
         # Model a variable Ref2VA-style
-        # [text | image refs | audio refs | target audio | target video]
-        # prefix.  Its length is intentionally neither calibrated nor aligned
-        # to the Query chunk size.
+        # [text | image refs | audio refs | target audio | clean continuation
+        # video | noisy target video].  The extended protected prefix is
+        # intentionally neither calibrated nor aligned to the Query chunk.
         hidden = torch.randn(901, 8)
         residual = torch.randn_like(hidden)
-        gate = torch.randn(4, 8)
+        gate = torch.randn(5, 8)
         segments = (
             (0, 97, 0),
             (97, 257, 1),
             (257, 389, 2),
-            (389, 901, 3),
+            (389, 517, 3),
+            (517, 901, 4),
         )
         expected = _gated_residual(
             residual.clone(), attention(hidden, None), gate, segments
         )
         actual = residual.clone()
         with (
-            attention_protected_prefix(389),
-            attention_video_layout(4, 128),
+            attention_protected_prefix(517),
+            attention_video_layout(3, 128),
             long_sequence_query_chunking(128, split_qkv_outputs=True),
         ):
             self.assertTrue(
@@ -454,7 +481,7 @@ class SegmentedModulationTests(unittest.TestCase):
                 )
             )
         torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-6)
-        self.assertEqual(prefix_query_sizes, [128, 128, 128, 5])
+        self.assertEqual(prefix_query_sizes, [128, 128, 128, 128, 5])
         self.assertEqual(projection_ranges[:8], [(8, 24)] * 8)
         self.assertEqual(projection_ranges[8:], [(0, 8)] * 8)
 
@@ -1235,6 +1262,50 @@ class SegmentedModulationTests(unittest.TestCase):
         self.assertEqual(segments[0][0], 0)
         self.assertEqual(segments[-1][1], layout.sequence_length)
         self.assertTrue(all(left[1] == right[0] for left, right in zip(segments, segments[1:])))
+
+    def test_timestep_plan_pins_masked_av_prefix_to_clean_clock(self) -> None:
+        layout = build_fl2va_layout(
+            text_length=5,
+            latent_frames=4,
+            latent_height=4,
+            latent_width=4,
+            audio_frames=10,
+        )
+        values, segments, rows = FullH3DiT._timestep_plan(
+            torch.tensor([0.75]),
+            layout,
+            sigma_shift_video=12.0,
+            sigma_shift_audio=3.0,
+            visual_condition_timestep=0.999,
+            audio_condition_timestep=1.0,
+            text_token_tags=None,
+            device=torch.device("cpu"),
+            masked_video_prefix_rows=8,
+            masked_audio_prefix_rows=6,
+        )
+
+        video = layout.segment("video", last=True)
+        audio = layout.segment("audio", last=True)
+        video_parts = [
+            item for item in segments
+            if video.start <= item[0] and item[1] <= video.stop
+        ]
+        audio_parts = [
+            item for item in segments
+            if audio.start <= item[0] and item[1] <= audio.stop
+        ]
+        self.assertEqual([(a, b) for a, b, _ in video_parts], [
+            (video.start, video.start + 8),
+            (video.start + 8, video.stop),
+        ])
+        self.assertEqual([(a, b) for a, b, _ in audio_parts], [
+            (audio.start, audio.start + 6),
+            (audio.start + 6, audio.stop),
+        ])
+        self.assertAlmostEqual(float(values[video_parts[0][2] // 3]), 0.999)
+        self.assertAlmostEqual(float(values[audio_parts[0][2] // 3]), 1.0)
+        self.assertEqual(video_parts[1][2] // 3, rows["video"])
+        self.assertEqual(audio_parts[1][2] // 3, rows["audio"])
 
 
 if __name__ == "__main__":

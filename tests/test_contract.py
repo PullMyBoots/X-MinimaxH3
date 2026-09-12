@@ -7,6 +7,8 @@ from h3serve.contract import (
     GenerationSpec,
     MODEL_LAUNCHERS,
     SecondSamplingSpec,
+    VideoRepairSpec,
+    automatic_face_repair_window_seconds,
     default_quality,
     public_options,
     resolve_frames,
@@ -16,10 +18,191 @@ from h3serve.contract import (
 
 
 class ContractTest(unittest.TestCase):
-    def test_six_resource_launchers_are_orthogonal_to_base_lora_variant(self) -> None:
+    def test_video_repair_contract_auto_plans_face_atlas(self) -> None:
+        repair = VideoRepairSpec.from_mapping({
+            "capacity": 16,
+            "canvas_size": 1088,
+            "acceleration": 72,
+        })
+        self.assertEqual(repair.model_variant, "lora")
+        self.assertEqual(repair.maximum_regions, 16)
+        self.assertEqual(repair.canvas_size, 1088)
+        self.assertEqual(repair.grid_size, 4)
+        self.assertEqual(repair.cell_size, 272)
+        self.assertEqual(repair.source_crop_size, 181)
+        self.assertEqual(repair.atlas_layout(2), (4, 1088))
+        self.assertEqual(repair.steps, 4)
+        self.assertEqual(repair.acceleration, 72)
+        self.assertEqual(repair.denoise, 0.55)
+        self.assertEqual(repair.minimum_window_seconds, 4.0)
+        self.assertEqual(repair.window_seconds, 6.0)
+        self.assertEqual(repair.overlap_seconds, 0.2)
+        self.assertEqual(
+            VideoRepairSpec.from_mapping(repair.to_dict()), repair
+        )
+
+        medium = VideoRepairSpec.from_mapping({"capacity": 9, "canvas_size": 960})
+        self.assertEqual((medium.grid_size, medium.canvas_size), (3, 960))
+        self.assertEqual(medium.atlas_layout(3), (3, 960))
+        legacy = VideoRepairSpec.from_mapping({"grid_size": 4})
+        self.assertEqual((legacy.max_faces, legacy.canvas_size), (16, 768))
+        with self.assertRaisesRegex(ContractError, "must be 1, 4, 9 or 16"):
+            VideoRepairSpec.from_mapping({"max_faces": 6})
+        with self.assertRaisesRegex(ContractError, "divisible by 32"):
+            VideoRepairSpec.from_mapping({"canvas_size": 750})
+        with self.assertRaisesRegex(ContractError, "acceleration must be between 0 and 100"):
+            VideoRepairSpec.from_mapping({"acceleration": 101})
+
+    def test_video_repair_window_cap_follows_canvas_resolution(self) -> None:
+        self.assertEqual(automatic_face_repair_window_seconds(544), 15.0)
+        self.assertEqual(automatic_face_repair_window_seconds(736), 10.0)
+        self.assertEqual(automatic_face_repair_window_seconds(1088), 6.0)
+        self.assertEqual(
+            VideoRepairSpec.from_mapping({"canvas_size": 544}).window_seconds,
+            15.0,
+        )
+        self.assertEqual(
+            VideoRepairSpec.from_mapping({"canvas_size": 736}).window_seconds,
+            10.0,
+        )
+        self.assertEqual(
+            VideoRepairSpec.from_mapping({
+                "canvas_size": 544,
+                "window_seconds": 6.0,
+            }).window_seconds,
+            15.0,
+        )
+
+    def test_selflift_progressive_generation_contract(self) -> None:
+        request = {
+            "prompt": "SelfLift night street",
+            "service_family": "first_last",
+            "model_variant": "lora",
+            "resolution": "1080p",
+            "aspect_ratio": "16:9",
+            "duration_seconds": 5,
+            "sampling_steps": 8,
+            "acceleration": 50,
+            "selflift_enabled": True,
+            "selflift_initial_resolution": "540p",
+        }
+        spec = GenerationSpec.from_mapping(request)
+        self.assertTrue(spec.selflift_enabled)
+        self.assertEqual(spec.selflift_transition_step, 6)
+        self.assertEqual(spec.selflift_initial_resolution, "540p")
+        self.assertFalse(spec.selflift_temporal_window_enabled)
+        self.assertEqual(GenerationSpec.from_mapping(spec.to_dict()), spec)
+
+        windowed = GenerationSpec.from_mapping({
+            **request,
+            "selflift_temporal_window_enabled": True,
+            "selflift_temporal_window_seconds": 5.5,
+            "selflift_temporal_overlap_seconds": 2.4,
+        })
+        self.assertTrue(windowed.selflift_temporal_window_enabled)
+        self.assertEqual(windowed.selflift_temporal_window_seconds, 5.5)
+        self.assertEqual(windowed.selflift_temporal_overlap_seconds, 2.4)
+        self.assertEqual(GenerationSpec.from_mapping(windowed.to_dict()), windowed)
+        maximum_window = GenerationSpec.from_mapping({
+            **request,
+            "selflift_temporal_window_enabled": True,
+            "selflift_temporal_window_seconds": 15.0,
+        })
+        self.assertEqual(maximum_window.selflift_temporal_window_seconds, 15.0)
+        with self.assertRaisesRegex(ContractError, "between 3 and 15"):
+            GenerationSpec.from_mapping({
+                **request,
+                "selflift_temporal_window_seconds": 15.5,
+            })
+        with self.assertRaisesRegex(ContractError, "between 0 and 4"):
+            GenerationSpec.from_mapping({
+                **request,
+                "selflift_temporal_overlap_seconds": 4.1,
+            })
+
+        final_1440 = GenerationSpec.from_mapping({
+            **request,
+            "resolution": "1440p",
+            "selflift_initial_resolution": "1080p",
+        })
+        self.assertEqual(final_1440.resolution, "2k")
+        self.assertEqual((final_1440.width, final_1440.height), (2560, 1440))
+
+        with self.assertRaisesRegex(ContractError, "first generation up to 1080p"):
+            GenerationSpec.from_mapping({
+                **request,
+                "resolution": "1440p",
+                "selflift_enabled": False,
+            })
+
+        preview = GenerationSpec.from_mapping({
+            **request,
+            "preview_mode": "auto",
+            "preview_step_index": 5,
+            "preview_branch_steps": 2,
+            "preview_fast_finish": True,
+        })
+        self.assertEqual(preview.preview_step_index, 5)
+        self.assertEqual(preview.preview_branch_steps, 2)
+
+        fork = GenerationSpec.from_mapping({
+            **request,
+            "selflift_transition_step": 6,
+            "execution_mode": "checkpoint",
+            "checkpoint_step": 6,
+            "checkpoint_retain": True,
+            "checkpoint_preview": True,
+            "checkpoint_preview_steps": 2,
+            "checkpoint_preview_resolution": "source",
+        })
+        self.assertEqual(fork.checkpoint_step, fork.selflift_transition_step)
+        with self.assertRaisesRegex(ContractError, "resolution transition"):
+            GenerationSpec.from_mapping({
+                **request,
+                "selflift_transition_step": 6,
+                "execution_mode": "checkpoint",
+                "checkpoint_step": 5,
+                "checkpoint_retain": True,
+                "checkpoint_preview": True,
+            })
+
+        base = GenerationSpec.from_mapping({
+            **request,
+            "model_variant": "base",
+            "sampling_steps": 20,
+        })
+        self.assertTrue(base.selflift_enabled)
+        self.assertEqual(base.selflift_transition_step, 18)
+        self.assertEqual(base.model_variant, "base")
+        self.assertEqual(
+            public_options()["advanced_limits"]["selflift"]["model_variants"],
+            ["base", "lora"],
+        )
+        identity_handoff = GenerationSpec.from_mapping({
+            **request,
+            "selflift_initial_resolution": "1080p",
+        })
+        self.assertEqual(identity_handoff.selflift_initial_resolution, "1080p")
+        self.assertEqual(
+            (identity_handoff.width, identity_handoff.height),
+            resolve_geometry("1080p", "16:9"),
+        )
+        with self.assertRaisesRegex(ContractError, "cannot exceed"):
+            GenerationSpec.from_mapping({
+                **request,
+                "resolution": "720p",
+                "selflift_initial_resolution": "1080p",
+            })
+        with self.assertRaisesRegex(ContractError, "leave at least one"):
+            GenerationSpec.from_mapping({
+                **request,
+                "selflift_transition_step": 8,
+            })
+
+    def test_internal_resource_launchers_are_orthogonal_to_base_lora_variant(self) -> None:
         options = public_options()
         self.assertEqual(set(options["model_launchers"]), set(MODEL_LAUNCHERS))
-        self.assertEqual(len(MODEL_LAUNCHERS), 6)
+        self.assertEqual(len(MODEL_LAUNCHERS), 10)
         self.assertEqual(
             options["model_launchers"]["fl2va_w4a8_8gb"]["variants"],
             ["base", "lora"],
@@ -81,6 +264,18 @@ class ContractTest(unittest.TestCase):
         })
         self.assertEqual((sixteen_1080p.width, sixteen_1080p.height), (1920, 1088))
         self.assertEqual(sixteen_1080p.frames, 362)
+        sixteen_w4_1080p = GenerationSpec.from_mapping({
+            "prompt": "16GB W4A8 experimental native 1080p",
+            "runtime_launcher": "fl2va_w4a8_16gb",
+            "resolution": "1080p",
+            "duration_seconds": 15,
+        })
+        self.assertEqual(
+            (sixteen_w4_1080p.width, sixteen_w4_1080p.height),
+            (1920, 1088),
+        )
+        self.assertEqual(sixteen_w4_1080p.weight_tier, "w4a8")
+        self.assertEqual(sixteen_w4_1080p.vram_profile, "16gb")
 
         with self.assertRaisesRegex(ContractError, "24gb.*1080p"):
             GenerationSpec.from_mapping({
@@ -124,6 +319,33 @@ class ContractTest(unittest.TestCase):
         }, source=source)
         self.assertEqual(second_1440p.resolution, "2k")
         self.assertEqual((second_1440p.width, second_1440p.height), (2560, 1440))
+        continuous = SecondSamplingSpec.from_mapping({
+            "resolution": "1220p", "steps": 2, "acceleration": 75,
+        }, source=source)
+        self.assertEqual(continuous.resolution, "1220p")
+        self.assertEqual((continuous.width, continuous.height), (2176, 1216))
+        arbitrary = SecondSamplingSpec.from_mapping({
+            "resolution": "1157p", "steps": 2, "acceleration": 75,
+        }, source=source)
+        self.assertEqual((arbitrary.width, arbitrary.height), (2048, 1152))
+
+        automatic = {
+            1: 0.10, 2: 0.15, 3: 0.20, 4: 0.20,
+            5: 0.22, 6: 0.23, 7: 0.24, 8: 0.25,
+        }
+        for steps, denoise in automatic.items():
+            derived = SecondSamplingSpec.from_mapping({
+                "resolution": "1080p", "steps": steps,
+            }, source=source)
+            self.assertEqual(derived.strength, "auto")
+            self.assertEqual(derived.denoise, denoise)
+        defaulted = SecondSamplingSpec.from_mapping({
+            "resolution": "1080p",
+        }, source=source)
+        self.assertEqual(defaulted.method, "h3")
+        self.assertEqual(defaulted.steps, 4)
+        self.assertEqual(defaulted.strength, "auto")
+        self.assertEqual(defaulted.denoise, 0.20)
 
         strong = SecondSamplingSpec.from_mapping({
             "resolution": "1080p", "steps": 8,
@@ -132,13 +354,31 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(strong.model_variant, "base")
         self.assertEqual(strong.strength, "strong")
         self.assertEqual(strong.denoise, 0.30)
-        with self.assertRaisesRegex(ContractError, "Base weights only"):
+        lora = SecondSamplingSpec.from_mapping({
+            "resolution": "1080p", "steps": 4, "model_variant": "lora",
+        }, source=source)
+        self.assertEqual(lora.model_variant, "lora")
+        self.assertEqual(lora.steps, 4)
+        with self.assertRaisesRegex(ContractError, "at least four"):
             SecondSamplingSpec.from_mapping({
-                "resolution": "1080p", "model_variant": "lora",
+                "resolution": "1080p", "steps": 3,
+                "model_variant": "lora",
             }, source=source)
         with self.assertRaisesRegex(ContractError, "between 68 and 362"):
             SecondSamplingSpec.from_mapping({
                 "resolution": "1080p", "temporal_window_frames": 51,
+            }, source=source)
+
+        temporal = SecondSamplingSpec.from_mapping({
+            "method": "flashvsr", "resolution": "720p",
+        }, source=source)
+        self.assertEqual(temporal.method, "temporal")
+        self.assertEqual(temporal.spatial_mode, "temporal_diffusion_1step")
+        self.assertEqual((temporal.width, temporal.height), (1280, 736))
+        self.assertEqual(SecondSamplingSpec(**temporal.to_dict()), temporal)
+        with self.assertRaisesRegex(ContractError, "method must be h3 or temporal"):
+            SecondSamplingSpec.from_mapping({
+                "method": "per_frame_sharpen", "resolution": "720p",
             }, source=source)
 
         same_size = GenerationSpec.from_mapping({
@@ -217,6 +457,30 @@ class ContractTest(unittest.TestCase):
         self.assertTrue(spec.joint_acceleration_enabled)
         self.assertEqual(spec.sampling_steps, 15)
         self.assertEqual(spec.acceleration, 72.5)
+        self.assertEqual(spec.second_pass_acceleration, 72.5)
+        self.assertEqual(spec.acceleration_transition_step, 15)
+
+        staged = GenerationSpec.from_mapping({
+            "prompt": "stage-local acceleration",
+            "engine": "original",
+            "width": 1280,
+            "height": 736,
+            "duration_seconds": 5,
+            "sampling_steps": 20,
+            "acceleration": 35,
+            "second_pass_acceleration": 70,
+            "acceleration_transition_step": 18,
+        })
+        self.assertEqual(staged.acceleration, 35.0)
+        self.assertEqual(staged.second_pass_acceleration, 70.0)
+        self.assertEqual(staged.acceleration_transition_step, 18)
+        self.assertEqual(GenerationSpec.from_mapping(staged.to_dict()), staged)
+
+        with self.assertRaisesRegex(ContractError, "stage acceleration controls"):
+            GenerationSpec.from_mapping({
+                "prompt": "missing shared controls",
+                "second_pass_acceleration": 50,
+            })
 
     def test_sampling_steps_accept_each_variant_published_range(self) -> None:
         for variant, bounds in (("base", (5, 30)), ("lora", (4, 10))):
@@ -348,15 +612,48 @@ class ContractTest(unittest.TestCase):
 
     def test_common_geometries_follow_h3_grid(self) -> None:
         self.assertEqual(resolve_geometry("480p", "16:9"), (864, 480))
+        self.assertEqual(resolve_geometry("540p", "16:9"), (960, 544))
         self.assertEqual(resolve_geometry("720p", "16:9"), (1280, 736))
+        self.assertEqual(resolve_geometry("900p", "16:9"), (1600, 896))
         self.assertEqual(resolve_geometry("1080p", "16:9"), (1920, 1088))
         self.assertEqual(resolve_geometry("2k", "16:9"), (2560, 1440))
         self.assertEqual(resolve_geometry("360p", "9:16"), (352, 640))
-        for resolution in ("360p", "480p", "720p", "1080p", "2k"):
+        self.assertEqual(resolve_geometry("650p", "16:9"), (1152, 640))
+        for resolution in ("360p", "480p", "540p", "720p", "900p", "1080p", "2k"):
             for ratio in ("1:1", "4:3", "3:4", "16:9", "9:16"):
                 width, height = resolve_geometry(resolution, ratio)
                 self.assertEqual(width % 32, 0)
                 self.assertEqual(height % 32, 0)
+
+    def test_first_generation_accepts_continuous_short_edge_and_uses_safe_limit_row(self) -> None:
+        limits = public_options()["duration"]["max_by_preset"]
+        limits["720p"]["16:9"] = 5
+        spec = GenerationSpec.from_mapping({
+            "prompt": "continuous first generation",
+            "resolution": "650p",
+            "aspect_ratio": "16:9",
+            "duration_seconds": 5,
+        }, max_duration_by_preset=limits)
+        self.assertEqual(spec.resolution, "650p")
+        self.assertEqual((spec.width, spec.height), (1152, 640))
+        self.assertEqual(GenerationSpec.from_mapping(spec.to_dict()), spec)
+        with self.assertRaisesRegex(ContractError, "supports at most 5"):
+            GenerationSpec.from_mapping({
+                "prompt": "over configured limit",
+                "resolution": "650p",
+                "aspect_ratio": "16:9",
+                "duration_seconds": 6,
+            }, max_duration_by_preset=limits)
+        for invalid in ("359p", "1081p", "auto", "650"):
+            with self.assertRaises(ContractError):
+                GenerationSpec.from_mapping({
+                    "prompt": "invalid continuous resolution",
+                    "resolution": invalid,
+                })
+        self.assertEqual(public_options()["resolution"], {
+            "min": 360, "max": 1080, "step": 1,
+            "detents": [360, 480, 540, 720, 900, 1080],
+        })
 
     def test_duration_is_aligned_to_h3_frame_grid(self) -> None:
         self.assertEqual(resolve_frames(5), (124, 124 / 24))
@@ -451,10 +748,10 @@ class ContractTest(unittest.TestCase):
             "preview_fast_finish": True,
         })
         self.assertTrue(fast.preview_fast_finish)
-        with self.assertRaisesRegex(Exception, "between 1 and 3"):
+        with self.assertRaisesRegex(Exception, "between 1 and 30"):
             GenerationSpec.from_mapping({
                 "prompt": "invalid", "preview_mode": "auto",
-                "preview_branch_steps": 4,
+                "preview_branch_steps": 31,
             })
 
     def test_public_options_hide_execution_configuration(self) -> None:
@@ -496,9 +793,34 @@ class ContractTest(unittest.TestCase):
         with self.assertRaises(ContractError):
             GenerationSpec.from_mapping({"prompt": ""})
         with self.assertRaises(ContractError):
-            GenerationSpec.from_mapping({"prompt": "x", "duration_seconds": 16})
+            GenerationSpec.from_mapping({"prompt": "x", "duration_seconds": 61})
         with self.assertRaises(ContractError):
             GenerationSpec.from_mapping({"prompt": "x", "aspect_ratio": "2:1"})
+
+    def test_public_long_horizon_duration_stops_at_sixty_seconds(self) -> None:
+        options = public_options()
+        self.assertEqual(options["duration"]["max"], 60)
+        self.assertEqual(options["duration"]["long_horizon_max"], 60)
+        spec = GenerationSpec.from_mapping({
+            "prompt": "x",
+            "duration_seconds": 60,
+            "resolution": "480p",
+            "aspect_ratio": "16:9",
+        })
+        self.assertEqual(spec.requested_duration_seconds, 60)
+        self.assertIsNotNone(spec.output_frames)
+
+    def test_long_horizon_rejects_unsupported_checkpoint_and_preview_modes(self) -> None:
+        with self.assertRaisesRegex(ContractError, "checkpoint execution"):
+            GenerationSpec.from_mapping({
+                "prompt": "x", "duration_seconds": 30,
+                "execution_mode": "checkpoint", "checkpoint_step": 5,
+            })
+        with self.assertRaisesRegex(ContractError, "intermediate preview"):
+            GenerationSpec.from_mapping({
+                "prompt": "x", "duration_seconds": 30,
+                "preview_mode": "auto",
+            })
 
     def test_upscale_contract_preserves_ratio_and_round_trips(self) -> None:
         self.assertEqual(resolve_upscale_geometry(864, 480, "1080p"), (1944, 1080))
@@ -604,6 +926,31 @@ class ContractTest(unittest.TestCase):
                 "prompt": "unknown scope", "advanced": True, "width": 864,
                 "height": 480, "frames": 124, "actual_steps": 9,
                 "sparse_scope": "everywhere_except_the_bad_parts",
+            })
+
+    def test_selflift_sigma_scale_defaults_round_trips_and_validates(self) -> None:
+        payload = {
+            "prompt": "request-local full-film sigma",
+            "engine": "lora",
+            "resolution": "1080p",
+            "sampling_steps": 8,
+            "acceleration": 50,
+            "selflift_enabled": True,
+            "selflift_initial_resolution": "540p",
+            "selflift_transition_step": 6,
+        }
+        default = GenerationSpec.from_mapping(payload)
+        self.assertEqual(default.selflift_sigma_scale, 1.0)
+        tuned = GenerationSpec.from_mapping({
+            **payload,
+            "selflift_sigma_scale": 0.65,
+        })
+        self.assertEqual(tuned.selflift_sigma_scale, 0.65)
+        self.assertEqual(GenerationSpec.from_mapping(tuned.to_dict()), tuned)
+        with self.assertRaisesRegex(ContractError, "sigma scale"):
+            GenerationSpec.from_mapping({
+                **payload,
+                "selflift_sigma_scale": 0.2,
             })
 
 

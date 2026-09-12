@@ -7,6 +7,7 @@ own tokenization, the Qwen text encoder, schedulers, VAEs, or media muxing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Callable, Sequence
 
 import torch
@@ -45,6 +46,7 @@ from .mlp_spatial_lattice import (
 from .packed import (
     PackedLayout,
     build_fl2va_layout,
+    build_hybrid_condition_layout,
     build_ref2va_layout,
     pack_audio,
     patchify_video,
@@ -316,6 +318,8 @@ class FullH3DiT(nn.Module):
         audio_condition_timestep: float = 1.0,
         text_token_tags: torch.Tensor | None,
         device: torch.device,
+        masked_video_prefix_rows: int = 0,
+        masked_audio_prefix_rows: int = 0,
     ) -> tuple[
         torch.Tensor,
         tuple[ModulationSegment, ...],
@@ -330,10 +334,14 @@ class FullH3DiT(nn.Module):
         has_audio_condition = any(segment.kind == "ref_audio" for segment in layout.segments)
         condition_t = max(video_t, visual_condition_timestep)
         audio_condition_t = max(audio_t, audio_condition_timestep)
+        masked_video_t = max(video_t, visual_condition_timestep)
+        masked_audio_t = max(audio_t, audio_condition_timestep)
         unique_values = sorted(
             {video_t, audio_t}
             | ({condition_t} if has_condition else set())
             | ({audio_condition_t} if has_audio_condition else set())
+            | ({masked_video_t} if masked_video_prefix_rows else set())
+            | ({masked_audio_t} if masked_audio_prefix_rows else set())
         )
         rows = {value: index for index, value in enumerate(unique_values)}
         kind_time = {
@@ -347,7 +355,35 @@ class FullH3DiT(nn.Module):
         segments: list[ModulationSegment] = []
         for segment in layout.segments:
             base = rows[kind_time[segment.kind]] * 3
-            if segment.kind == "text" and text_token_tags is not None:
+            masked_prefix = (
+                masked_video_prefix_rows
+                if segment.kind == "video"
+                else masked_audio_prefix_rows
+                if segment.kind == "audio"
+                else 0
+            )
+            if masked_prefix:
+                if masked_prefix >= segment.length:
+                    raise ValueError(
+                        f"masked {segment.kind} prefix must leave generated rows"
+                    )
+                pin_time = (
+                    masked_video_t
+                    if segment.kind == "video"
+                    else masked_audio_t
+                )
+                tag = kind_tag[segment.kind]
+                segments.append((
+                    segment.start,
+                    segment.start + masked_prefix,
+                    rows[pin_time] * 3 + tag,
+                ))
+                segments.append((
+                    segment.start + masked_prefix,
+                    segment.stop,
+                    base + tag,
+                ))
+            elif segment.kind == "text" and text_token_tags is not None:
                 tags = text_token_tags.reshape(-1).to(dtype=torch.long)
                 if tags.numel() != segment.length:
                     raise ValueError("text_token_tags length does not match text sequence")
@@ -409,6 +445,9 @@ class FullH3DiT(nn.Module):
         block_stack_runner: Callable[..., torch.Tensor] | None = None,
         mlp_chunk_tokens: int | None = None,
         final_projection_chunk_tokens: int | None = None,
+        masked_video_prefix_latent_frames: int = 0,
+        masked_audio_prefix_latent_frames: int = 0,
+        target_time_offset: float = 0.0,
     ) -> H3DiTOutput:
         if video_latent.ndim != 5 or video_latent.shape[0] != 1:
             raise ValueError("video_latent must be batch-one [1,C,T,H,W]")
@@ -416,17 +455,22 @@ class FullH3DiT(nn.Module):
             raise ValueError("audio_latent must be batch-one [1,C,2,T]")
         if context.ndim != 3 or context.shape[0] != 1:
             raise ValueError("context must be batch-one [1,L,D]")
-        if (reference_shapes or reference_audio_frames) and keyframe_indices:
-            raise ValueError("Ref2VA references and FL2VA keyframe anchors cannot be mixed")
         if reference_shapes or reference_audio_frames:
-            if len(condition_video_latents) != len(reference_shapes):
-                raise ValueError("each Ref2VA reference requires one condition latent")
+            expected_video_conditions = len(reference_shapes) + len(keyframe_indices)
+            if len(condition_video_latents) != expected_video_conditions:
+                raise ValueError(
+                    "each reference and keyframe requires one condition latent"
+                )
             if len(condition_audio_latents) != len(reference_audio_frames):
                 raise ValueError("each Ref2VA audio reference requires one condition latent")
         elif len(condition_video_latents) != len(keyframe_indices):
             raise ValueError("each keyframe anchor requires one condition latent")
         if audio_transport_scale is not None and audio_transport_scale <= 0.0:
             raise ValueError("audio_transport_scale must be positive")
+        if not 0 <= int(masked_video_prefix_latent_frames) < int(video_latent.shape[2]):
+            raise ValueError("masked video prefix must leave generated latent frames")
+        if not 0 <= int(masked_audio_prefix_latent_frames) < int(audio_latent.shape[-1]):
+            raise ValueError("masked audio prefix must leave generated latent frames")
         active_video_shift = float(
             self.config.sigma_shift_video
             if sigma_shift_video is None else sigma_shift_video
@@ -437,6 +481,11 @@ class FullH3DiT(nn.Module):
         )
         if active_video_shift <= 0.0 or active_audio_shift <= 0.0:
             raise ValueError("sigma shifts must be positive")
+        target_time_offset = float(target_time_offset)
+        if not math.isfinite(target_time_offset) or target_time_offset < 0.0:
+            raise ValueError("target_time_offset must be finite and non-negative")
+        if target_time_offset and (reference_shapes or reference_audio_frames):
+            raise ValueError("target_time_offset is not supported for Ref2VA layouts")
 
         # Current H3 runtimes carry the audio stream on the video sigma clock.
         # At a source step the carried latent is converted back to its own
@@ -466,7 +515,24 @@ class FullH3DiT(nn.Module):
         audio_frames = int(audio_latent.shape[-1])
         text_length = int(context.shape[1])
         if layout is None:
-            if reference_shapes or reference_audio_frames:
+            if (reference_shapes or reference_audio_frames) and keyframe_indices:
+                if output_frame_count is None:
+                    raise ValueError(
+                        "output_frame_count is required for mixed keyframe conditioning"
+                    )
+                layout = build_hybrid_condition_layout(
+                    text_length=text_length,
+                    latent_frames=latent_t,
+                    latent_height=latent_h,
+                    latent_width=latent_w,
+                    audio_frames=audio_frames,
+                    reference_shapes=reference_shapes,
+                    reference_kinds=reference_kinds,
+                    reference_audio_frames=reference_audio_frames,
+                    keyframe_indices=keyframe_indices,
+                    output_frame_count=output_frame_count,
+                )
+            elif reference_shapes or reference_audio_frames:
                 layout = build_ref2va_layout(
                     text_length=text_length,
                     latent_frames=latent_t,
@@ -486,15 +552,32 @@ class FullH3DiT(nn.Module):
                     audio_frames=audio_frames,
                     keyframe_indices=keyframe_indices,
                     output_frame_count=output_frame_count,
+                    target_time_offset=target_time_offset,
                 )
         condition_signature = (
             (
+                "hybrid_reference_keyframe_v1",
+                tuple(value for shape in reference_shapes for value in map(int, shape)),
+                tuple(reference_kinds) if reference_kinds else ("image",) * len(reference_shapes),
+                tuple(int(value) for value in reference_audio_frames),
+                tuple(int(index) for index in keyframe_indices),
+                int(output_frame_count or 0),
+            )
+            if (reference_shapes or reference_audio_frames) and keyframe_indices
+            else (
                 tuple(value for shape in reference_shapes for value in map(int, shape)),
                 tuple(reference_kinds) if reference_kinds else ("image",) * len(reference_shapes),
                 tuple(int(value) for value in reference_audio_frames),
             )
             if reference_shapes or reference_audio_frames
-            else tuple(int(index) for index in keyframe_indices)
+            else (
+                tuple(int(index) for index in keyframe_indices)
+                if target_time_offset == 0.0
+                else (
+                    tuple(int(index) for index in keyframe_indices),
+                    ("target_time_offset", target_time_offset),
+                )
+            )
         )
         expected_signature = (
             text_length,
@@ -663,6 +746,16 @@ class FullH3DiT(nn.Module):
             audio_condition_timestep=audio_condition_timestep,
             text_token_tags=text_token_tags,
             device=device,
+            masked_video_prefix_rows=(
+                int(masked_video_prefix_latent_frames)
+                * layout.segment("video", last=True).length
+                // int(video_latent.shape[2])
+            ),
+            masked_audio_prefix_rows=(
+                int(masked_audio_prefix_latent_frames)
+                * layout.segment("audio", last=True).length
+                // int(audio_latent.shape[-1])
+            ),
         )
         frequencies = layout.device_rope_table
         if frequencies is None or frequencies.device != device:
@@ -674,12 +767,25 @@ class FullH3DiT(nn.Module):
             )
             layout.device_rope_table = frequencies
         curve_rows = self.block_stack.prepare_curve_rows(unique_timesteps)
-        protected_prefix = layout.segment("video", last=True).start
         generated_video = layout.segment("video", last=True)
         latent_frame_count = int(video_latent.shape[2])
         if generated_video.length % latent_frame_count:
             raise ValueError("generated video rows do not form complete latent frames")
         frame_tokens = generated_video.length // latent_frame_count
+        masked_video_prefix_rows = (
+            int(masked_video_prefix_latent_frames) * frame_tokens
+        )
+        # Sparse H3 attention treats every row before ``protected_prefix`` as
+        # dense context and lets each generated-video query attend all of it.
+        # A continuation window's clean video prefix is contiguous with the
+        # ordinary text/condition/audio prefix, so extending this boundary is
+        # the exact sparse analogue of Continuum's masked joint-AV context:
+        # carried frames remain full-fidelity keys and queries while only the
+        # newly generated suffix is eligible for video-to-video sparsity.
+        protected_prefix = generated_video.start + masked_video_prefix_rows
+        sparse_video_frame_count = (
+            latent_frame_count - int(masked_video_prefix_latent_frames)
+        )
         patch_t, patch_h, patch_w = self.config.patch_size
         if patch_t != 1:
             raise ValueError("attention video geometry currently requires temporal patch size 1")
@@ -708,7 +814,7 @@ class FullH3DiT(nn.Module):
         with (
             attention_protected_prefix(protected_prefix),
             attention_video_layout(
-                latent_frame_count,
+                sparse_video_frame_count,
                 frame_tokens,
                 grid_height=grid_height,
                 grid_width=grid_width,

@@ -388,7 +388,8 @@ def serve(args) -> None:
                 "request_id": request_id, "ok": True, **result
             }), flush=True)
         except Exception as error:
-            traceback.print_exc(file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
             print(RESPONSE_PREFIX + json.dumps({
                 "request_id": request_id,
                 "ok": False,

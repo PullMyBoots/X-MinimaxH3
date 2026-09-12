@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "purpose": "Long-horizon V19 Pareto gate for contact causality, dialogue, mouth clarity and identity continuity. Prompt content is not a scheduler input.",
+  "expected_dialogue": [
+    {
+      "order": 1,
+      "speaker_role": "female_mechanic",
+      "text": "刹车油管裂了先别发动车",
+      "window_seconds": [0.0, 5.0]
+    },
+    {
+      "order": 2,
+      "speaker_role": "male_driver",
+      "text": "明白我去拿新的油管",
+      "window_seconds": [5.0, 10.0]
+    }
+  ],
+  "visual_sample_seconds": [0.8, 3.8, 5.8, 7.8, 10.8, 13.8],
+  "scenarios": [
+    {
+      "name": "long_workshop_handoff_dialogue_seed82332",
+      "seed": 82332,
+      "width": 1280,
+      "height": 736,
+      "frames": 362,
+      "steps": 20,
+      "prompt": "integrated_multimodal_description: [Shot 1]\n写实电影质感的老式机械维修车间，夜晚，一个15.083秒的连续长镜头，全程不得切镜。全片只有两名身份稳定的人物：穿深蓝工作服、扎低马尾的女机械师（S1），以及穿棕色夹克的男司机（S2）。同一只红色金属工具箱（O1）和同一辆抬起引擎盖的旧越野车（V1）始终保持形状与空间连续。\n\n0至5秒，S1双手提着O1快步绕过V1车头，把工具箱完整放到金属工作台上；箱底先接触台面，双手随后松开，工具箱不得悬空或瞬移。S2从车门旁迎面走近，在安全距离停下。S1看着S2，口型清楚地说：<d>[Chinese] 刹车油管裂了，先别发动车。</d> S1说话时S2保持沉默且嘴唇闭合。\n\n5至10秒，S2点头，从右侧口袋取出一串钥匙，手臂连续伸向S1。S1抬起左手，双方手指在钥匙处发生清楚接触后，钥匙才从S2手中转移到S1手中；钥匙不得在接触前消失或凭空出现在另一只手。S2看着S1回答：<d>[Chinese] 明白，我去拿新的油管。</d> S2说话时S1保持沉默且嘴唇闭合。\n\n10至15.083秒，S1用收到的钥匙打开O1的锁扣，掀开箱盖，取出扳手并转身走向V1的前轮。S2从她身后绕向车间出口并推开半扇金属门离开；只有被他的手实际推动的门扇运动，另一扇门保持静止。摄影机从中景平稳侧移，使钥匙交接、工具箱开合与开门动作都清楚可见。\n\noverall_soundscape: 两名可区分的自然中文男女声严格说出两个<d>标签中的台词并与可见口型同步；工具箱落在金属台面的撞击声、钥匙轻响、锁扣打开声、脚步声、衣物摩擦声、远处车间风扇和金属门铰链声。除规定台词外不得出现其他人声。\n\nnon_diegetic_music: N/A",
+      "offload_mode": "block",
+      "mlp_chunk_tokens": 8192,
+      "prefetch_depth": 1,
+      "resident_block_count": 0,
+      "vae_tile_size": 288,
+      "vae_tile_batch_size": 1
+    }
+  ]
+}

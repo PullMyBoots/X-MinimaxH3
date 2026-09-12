@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# CUDA illegal-access faults cannot be recovered in-process. Disable giant
+# WSL core dumps; every generation failure already has a per-job error log.
+ulimit -c 0
+
 release_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -f "${release_root}/.env.local" ]]; then
   source "${release_root}/.env.local"
 fi
 mkdir -p "${release_root}/runtime/tmp"
 export TMPDIR="${TMPDIR:-${release_root}/runtime/tmp}"
+# Engine selection happens after Python starts. Fragmentation-safe expandable
+# segments must therefore be selected before Torch imports, particularly for
+# the 8-GiB W4A8 route. An explicit operator setting still takes precedence.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 source "${release_root}/scripts/_process.sh"
 source "${release_root}/scripts/_runtime.sh"
 

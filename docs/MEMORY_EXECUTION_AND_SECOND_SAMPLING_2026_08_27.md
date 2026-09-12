@@ -134,7 +134,7 @@ FL2VA 1080P×15秒、Ref2VA图片/音频条件、同一热会话连续任务和�
 参考图、1段参考音频、480P×15秒源片和2560×1440×362帧目标，在15.25GiB硬预算下
 完成3个全空间时间窗口、1个真实SA Solver二采步及最终AV封装：二采256.542秒，
 峰值分配13.6587GiB、峰值预留14.6172GiB，输出为24fps、362帧和32kHz双声道。
-证据位于`/root/x-minimaxh3-runtime/runtime/validation/int8_16gb_1440p15_release_gate_r1/`。
+证据位于`/root/h3-new-serve-runtime/runtime/validation/int8_16gb_1440p15_release_gate_r1/`。
 
 API不再提交显存模式：
 

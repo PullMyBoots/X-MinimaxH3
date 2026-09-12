@@ -1,0 +1,264 @@
+{
+  "model_variant": "lora",
+  "resolution": "480p",
+  "aspect_ratio": "16:9",
+  "sampling_steps": 7,
+  "acceleration": 0,
+  "seed": 94001,
+  "long_video": {
+    "version": 2,
+    "overlap_seconds": 1.625,
+    "max_window_seconds": 15,
+    "memory": 60,
+    "story": {
+      "overview": "Realistic live action in one fixed small corner cafe during evening rain. Preserve exactly one owner, her face, proportions, wardrobe and voice, together with the fixed room layout and every unique prop for the complete video. No additional people, duplicate props, subtitles or visible text.",
+      "entities": {
+        "owner": {
+          "kind": "character",
+          "identity": "One middle-aged East Asian female cafe owner with one chin-length black bob, cream shirt, dark-green apron, silver watch, and one calm low adult voice."
+        },
+        "room": {
+          "kind": "location",
+          "identity": "One small corner cafe during evening rain with a walnut counter, rainy street window, warm pendant lamps and four fixed wooden tables."
+        },
+        "radio": {
+          "kind": "prop",
+          "identity": "One cream tabletop radio with one circular brass tuning dial."
+        },
+        "cup": {
+          "kind": "prop",
+          "identity": "One red ceramic cup with one matching red saucer."
+        },
+        "cloth": {
+          "kind": "prop",
+          "identity": "One folded grey cleaning cloth."
+        },
+        "window_table": {
+          "kind": "prop",
+          "identity": "The single wooden table nearest the rainy street window."
+        }
+      },
+      "initial_state": {
+        "owner": {
+          "location": "behind walnut counter in {{room}}",
+          "pose": "standing",
+          "right_hand": "holds {{cloth}}",
+          "left_hand": "empty",
+          "speech": "silent"
+        },
+        "room": {
+          "layout": "fixed",
+          "lighting": "warm pendant lamps",
+          "time": "evening rain"
+        },
+        "radio": {
+          "location": "walnut counter",
+          "power": "off",
+          "audio": "silent",
+          "visibility": "visible"
+        },
+        "cup": {
+          "location": "walnut counter beside {{radio}}",
+          "holder": null,
+          "visibility": "visible"
+        },
+        "cloth": {
+          "location": "{{owner}} right hand",
+          "holder": "{{owner}}",
+          "folded": true
+        },
+        "window_table": {
+          "location": "beside rainy window",
+          "contents": "empty",
+          "visibility": "background of opening view"
+        }
+      },
+      "shots": [
+        {
+          "id": "opening_wide",
+          "camera_style": "Stable naturalistic 35mm medium-wide coverage with fixed room geography.",
+          "overall_soundscape": "Steady rain on glass and quiet cafe room tone.",
+          "non_diegetic_music": "N/A",
+          "segments": [
+            {
+              "id": "counter_cleanup",
+              "duration_seconds": 10,
+              "transition": "opening",
+              "camera": {
+                "composition": "Medium-wide opening angle showing {{owner}} behind the counter, {{radio}} and {{cup}} in foreground, and {{window_table}} in the background.",
+                "motion": "One gentle short pan follows only {{owner}} hand movement; keep the room geometry readable.",
+                "end": "The same opening angle and scale, with {{owner}}, {{radio}}, {{cup}} and background {{window_table}} readable."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0,
+                  "end_seconds": 7.5,
+                  "text": "{{owner}} looks toward the rainy window and wipes one continuous section of the counter once using {{cloth}}.",
+                  "state_updates": {}
+                },
+                {
+                  "start_seconds": 7.5,
+                  "end_seconds": 9.75,
+                  "text": "She stops wiping, folds {{cloth}} once and holds it still without touching {{radio}} or {{cup}}.",
+                  "state_updates": {
+                    "owner": {
+                      "pose": "standing behind counter",
+                      "right_hand": "holds folded {{cloth}}"
+                    },
+                    "cloth": {
+                      "location": "{{owner}} right hand",
+                      "holder": "{{owner}}",
+                      "folded": true
+                    }
+                  }
+                }
+              ],
+              "dialogue": [
+                {
+                  "start_seconds": 4,
+                  "end_seconds": 7.1,
+                  "speaker": "owner",
+                  "language": "Chinese",
+                  "text": "雨还没停，先把窗边的桌子收好。"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "radio_closeup",
+          "camera_style": "Locked naturalistic close-up using a consistent lens and counter-side screen direction.",
+          "overall_soundscape": "Rain and cafe ambience continue; one cloth placement and one radio click match the visible actions. Narrow-band jazz is diegetic.",
+          "non_diegetic_music": "N/A",
+          "segments": [
+            {
+              "id": "switch_radio_on",
+              "duration_seconds": 10,
+              "transition": "cut",
+              "camera": {
+                "composition": "Counter-side locked close-up of the same {{radio}}, {{cup}}, and {{owner}} right hand; her face remains outside frame.",
+                "motion": "After the establishing hold, remain locked with no reframing.",
+                "end": "The same locked close-up after the hand withdraws."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0.75,
+                  "end_seconds": 2.6,
+                  "text": "{{owner}} places {{cloth}} once on the counter just outside the close-up; {{cup}} remains untouched.",
+                  "state_updates": {
+                    "owner": {
+                      "right_hand": "empty"
+                    },
+                    "cloth": {
+                      "location": "counter outside close-up",
+                      "holder": null,
+                      "folded": true
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 2.6,
+                  "end_seconds": 5.6,
+                  "text": "Her right hand turns the brass dial of {{radio}} once; quiet instrumental jazz begins.",
+                  "state_updates": {
+                    "radio": {
+                      "location": "walnut counter",
+                      "power": "on",
+                      "audio": "quiet narrow-band instrumental jazz",
+                      "visibility": "visible"
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 5.6,
+                  "end_seconds": 9.75,
+                  "text": "Her hand withdraws completely. {{radio}} remains on and {{cup}} remains stationary beside it.",
+                  "state_updates": {}
+                }
+              ],
+              "dialogue": [],
+              "establish_seconds": 0.75
+            }
+          ]
+        },
+        {
+          "id": "window_side",
+          "camera_style": "Naturalistic medium side coverage preserving the established cafe geography.",
+          "overall_soundscape": "Rain grows clearer near the window while the same radio jazz continues from behind; footsteps and one ceramic placement match the actions.",
+          "non_diegetic_music": "N/A",
+          "segments": [
+            {
+              "id": "move_cup",
+              "duration_seconds": 10,
+              "transition": "cut",
+              "camera": {
+                "composition": "Medium side view showing the continuous path from the counter to {{window_table}}; {{radio}} remains deep in the established room.",
+                "motion": "After the establishing hold, track {{owner}} sideways from counter to window at walking speed.",
+                "end": "Medium side view of {{owner}} beside {{window_table}}, with the single red {{cup}} released at its centre."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0.75,
+                  "end_seconds": 2.8,
+                  "text": "{{owner}} picks up the same red {{cup}} once with her right hand; {{radio}} stays on and {{cloth}} stays on the counter.",
+                  "state_updates": {
+                    "owner": {
+                      "right_hand": "holds {{cup}}"
+                    },
+                    "cup": {
+                      "location": "{{owner}} right hand",
+                      "holder": "{{owner}}"
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 2.8,
+                  "end_seconds": 7.1,
+                  "text": "She walks from the counter to {{window_table}} carrying {{cup}} steadily.",
+                  "state_updates": {
+                    "owner": {
+                      "location": "beside {{window_table}}",
+                      "pose": "standing"
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 7.1,
+                  "end_seconds": 9.75,
+                  "text": "She places {{cup}} once at the centre of {{window_table}}, fully releases it, and looks through the rainy window.",
+                  "state_updates": {
+                    "owner": {
+                      "location": "beside {{window_table}}",
+                      "right_hand": "empty",
+                      "pose": "looking through window"
+                    },
+                    "cup": {
+                      "location": "centre of {{window_table}}",
+                      "holder": null,
+                      "visibility": "visible"
+                    },
+                    "window_table": {
+                      "location": "beside rainy window",
+                      "contents": "single {{cup}} at centre",
+                      "visibility": "visible"
+                    }
+                  }
+                }
+              ],
+              "dialogue": [
+                {
+                  "start_seconds": 7.8,
+                  "end_seconds": 9.7,
+                  "speaker": "owner",
+                  "language": "Chinese",
+                  "text": "这张桌子留给最后一位客人。"
+                }
+              ],
+              "establish_seconds": 0.75
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -7,8 +7,9 @@ weights are not distributed in the source repository.
 ## 1. Hardware and storage
 
 - An NVIDIA SM89 GPU; other architectures are not release-validated.
-- At least 64GB of available host memory is recommended. Long or
-  high-resolution jobs benefit from more than 64GB.
+- The adjustable experimental floors are a 12GiB H3 service budget for W4A8
+  and 24GiB for INT8. The validated floors remain 16GiB and 32GiB. The
+  console reserves another 6GiB for the operating system.
 - Allow about 100GB for the complete INT8/W4A8, encoder, VAE, second-sampling
   and LoRA model set.
 - On WSL2, keep the hot runtime mirror and build caches in the Linux
@@ -71,21 +72,21 @@ export H3_SERVE_HOST=0.0.0.0
 
 Never commit `.env.local`, model weights, user inputs or generated media.
 
-## 5. Resource profiles
+## 5. Automatic resource execution
 
-The console exposes FL2VA and Ref2VA task families. Each has three isolated
-profiles:
+The console exposes four choices: W4A8/INT8 × FL2VA/Ref2VA. The server detects
+VRAM before loading weights and privately selects its 8GB, 16GB or 24GB
+executor. W4A8 requires at least 8GB VRAM and supports native generation up to
+720p plus second sampling up to 1080p. INT8 requires at least 16GB VRAM and
+supports the admitted 1080p generation envelope plus second sampling up to
+1440p.
 
-- 24GB INT8: highest-throughput tier, with the enabled native-generation range
-  and second sampling up to 1440p.
-- 16GB INT8: constrained-memory execution, including 1080p native generation
-  and 1440p second-sampling capability.
-- 8GB W4A8: experimental low-memory tier, native generation up to 720p and
-  1080p second sampling.
-
-These are logical allocator budgets, not a promise for every GPU of that
-capacity. The 8GB and 16GB paths were validated by hard allocator caps on SM89.
-An out-of-envelope job is rejected instead of silently switching backends.
+The model page also sets a hard maximum host-RAM allocation. Its upper bound
+keeps 6GiB for the OS. The limit covers the service and child processes via
+cgroup v2 `memory.max`; systems without a writable/delegated cgroup v2 memory
+controller fail explicitly instead of claiming that the cap is active. An
+out-of-envelope job is rejected instead of silently changing weights or
+resource contracts.
 
 ## 6. LoRAs and second sampling
 

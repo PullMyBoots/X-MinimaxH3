@@ -26,6 +26,8 @@ class TorchModuleBlockBuffer:
         self._targets = _state_tensors(module)
         if not self._targets:
             raise ValueError("H3 block buffer cannot be empty")
+        self._target_values = tuple(self._targets.values())
+        self._source_cache: dict[int, tuple[torch.Tensor, ...]] = {}
 
     @classmethod
     def from_source(cls, source: nn.Module, *, device: str) -> "TorchModuleBlockBuffer":
@@ -47,7 +49,7 @@ class TorchModuleBlockBuffer:
             total += int(tensor.numel()) * int(tensor.element_size())
         return total
 
-    def validate_source(self, source_block: Any) -> None:
+    def validate_source(self, source_block: Any) -> tuple[torch.Tensor, ...]:
         if not isinstance(source_block, nn.Module):
             raise TypeError("H3 block source must be a torch.nn.Module")
         source = _state_tensors(source_block)
@@ -65,6 +67,9 @@ class TorchModuleBlockBuffer:
                     f"{tuple(value.shape)}/{value.dtype} != "
                     f"{tuple(target.shape)}/{target.dtype}"
                 )
+        values = tuple(source[name] for name in self._targets)
+        self._source_cache[id(source_block)] = values
+        return values
 
     def load_from(
         self,
@@ -74,11 +79,15 @@ class TorchModuleBlockBuffer:
         non_blocking: bool,
     ) -> None:
         del block_index
-        self.validate_source(source_block)
-        source = _state_tensors(source_block)
+        source_values = self._source_cache.get(id(source_block))
+        if source_values is None:
+            source_values = self.validate_source(source_block)
         with torch.no_grad():
-            for name, target in self._targets.items():
-                target.copy_(source[name], non_blocking=non_blocking)
+            # Schema validation and state-dict traversal are startup work.
+            # Keep individual DMA submissions: the mixed-dtype foreach path
+            # regressed the physical 720p15 gate despite lower Python work.
+            for target, source in zip(self._target_values, source_values):
+                target.copy_(source, non_blocking=non_blocking)
 
 
 def build_h3_block_executor(
@@ -95,11 +104,45 @@ def build_h3_block_executor(
         for _ in range(config.block_buffer_count)
     )
     for source in source_blocks:
-        buffers[0].validate_source(source)
+        for buffer in buffers:
+            buffer.validate_source(source)
+
+    between_block_hook = None
+    if config.resource_profile == "w4a8_8gb":
+        # Long sparse cells allocate differently-shaped lookup/KV slabs in
+        # every H3 block.  Under the deliberate 7.25-GiB allocator ceiling,
+        # released slabs can occupy enough CUDA cache that the next block's
+        # full hidden-state RMS output cannot be admitted.  Preserve reusable
+        # cache normally and compact only when the next unavoidable hidden
+        # allocation would cross the budget.  This executes at a natural
+        # single-buffer boundary, never inside an Attention kernel.
+        guard_bytes = 128 * 1024**2
+        long_hidden_bytes = 512 * 1024**2
+
+        def compact_allocator_under_pressure(hidden: torch.Tensor) -> None:
+            next_hidden_bytes = int(hidden.numel()) * int(hidden.element_size())
+            reserved = int(torch.cuda.memory_reserved(config.device))
+            if (
+                next_hidden_bytes >= long_hidden_bytes
+                or
+                reserved + next_hidden_bytes + guard_bytes
+                > config.max_device_bytes
+            ):
+                # Kernel launches are asynchronous: at the immediate block
+                # boundary a dead slab may still be reported as allocated and
+                # only become reclaimable before the next RMS allocation.  The
+                # single-buffer 8-GiB path has no useful copy/compute overlap
+                # to preserve here, so synchronize only after the predictive
+                # pressure test fires, then release the now-dead cache.
+                torch.cuda.synchronize(config.device)
+                torch.cuda.empty_cache()
+
+        between_block_hook = compact_allocator_under_pressure
     return DoubleBufferBlockExecutor(
         buffers,
         create_stream_coordinator(config),
         overlap_copy_compute=prefetch_depth == 1,
+        between_block_hook=between_block_hook,
     )
 
 

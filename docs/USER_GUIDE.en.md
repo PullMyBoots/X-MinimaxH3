@@ -9,26 +9,33 @@ After setup, run:
 ```
 
 Open `http://127.0.0.1:8090`. The process starts as a lightweight console and
-loads H3 only after you select a launcher. The page reports actual loading
+loads H3 only after you select a model. The page reports actual loading
 stages and progress. Use `./stop.sh` to stop the backend; closing a browser tab
 does not stop the service.
 
-## 2. Six launchers
+## 2. Four model choices and automatic resources
 
-Each resource profile provides separate FL2VA and Ref2VA launchers:
+Choose W4A8 or INT8, then FL2VA or Ref2VA. The internal VRAM executor is not a
+user setting:
 
-| Profile | Weights | First generation | H3 second sampling | Notes |
-| --- | --- | --- | --- | --- |
-| 24GB | INT8 | up to 1080p × 15s | up to 1440p | primary RTX 4090 route |
-| 16GB | INT8 | experimental 1080p × 15s | up to 1440p | tighter allocator budget |
-| 8GB | W4A8 | up to 720p × 15s | up to 1080p | physical 8GB devices need separate validation |
+| Weights | Minimum VRAM | First generation | H3 second sampling |
+| --- | ---: | --- | --- |
+| W4A8 | 8GB | up to 720p × 15s | up to 1080p |
+| INT8 | 16GB | up to 1080p × 15s | up to 1440p |
+
+Set the maximum host RAM for the complete H3 process tree on the same page.
+W4A8 can be lowered experimentally to 12GiB and INT8 to 24GiB; their validated
+floors remain 16GiB and 32GiB. The slider keeps 6GiB outside H3 for
+the operating system. Linux enforces the selection with cgroup v2; the backend
+then derives pinned-memory and GPU block residency once while loading the
+model. It does not run a resource router on every DiT step.
 
 FL2VA supports text-only, first-frame, last-frame and first+last-frame tasks.
 Ref2VA accepts up to nine images, three videos and three independent audio
 references. Reference videos may total at most 15 seconds; embedded audio is
 not used as a voice reference.
 
-The queue must be empty before changing service family or resource profile.
+The queue must be empty before changing service family, weights or RAM budget.
 Base and the selected LoRA share one hot session and switch per request.
 
 ## 3. Prompts

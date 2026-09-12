@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "purpose": "PyTorch 2.13 + CUDA 13 runtime comparison against the frozen 720p5 Round229 workload.",
+  "expected_dialogue": [
+    {"order": 1, "text": "关上城门", "window_seconds": [0.0, 2.6]},
+    {"order": 2, "text": "马上照办", "window_seconds": [2.0, 5.17]}
+  ],
+  "visual_sample_seconds": [0.5, 1.5, 2.5, 3.5, 4.7],
+  "scenarios": [
+    {
+      "name": "torch213_cu130_cuda133_720p5_seed82303",
+      "seed": 82303,
+      "width": 1280,
+      "height": 736,
+      "frames": 124,
+      "prompt": "integrated_multimodal_description: [Shot 1]\n写实电影质感的中世纪石砌城门楼内部，夜晚，室外暴雨，火把照亮潮湿石墙。全片只有两个身份稳定的人物：身披深红斗篷的女指挥官（S1），以及穿灰色兜帽、浑身被雨淋湿的男斥候（S2）。这是一个5.17秒的连续长镜头，全程不得切镜，不得出现第三个人物。\n\n开头0至2.6秒，S1从画面左侧快速跑到木制地图桌前，将金属头盔用力放到桌面，立即转身指向厚重木门，直视S2并清楚地说：\n<d>[Chinese] 关上城门！</d>\nS1说话时S2保持沉默、嘴唇闭合并认真倾听。\n\n随后2.6至5.17秒，S2立刻大步跑向木门，双手抓住门闩并用力合上木门；他回头看向S1，清楚地回答：\n<d>[Chinese] 马上照办！</d>\nS2说话时S1保持沉默、嘴唇闭合并注视他。镜头平稳向右跟随S2的大幅移动，人物面孔、服装、体型和空间关系始终稳定，动作连续，雨水、火光、布料和盔甲运动真实。除上述两个<d>标签中的对白外，绝对不得出现任何额外人声、呢喃、喊叫、画外音、旁白或不可辨识语音；不得出现字幕、标题或画面文字。\n\noverall_soundscape: 清晰且彼此可区分的女声与男声严格说出两个<d>标签中的中文台词，并与可见人物口型同步；室外持续雨声、金属头盔撞击木桌声、急促脚步声、厚重木门关闭声、盔甲与衣物摩擦声，以及石砌房间的自然混响。对白之外不得出现任何额外人声。\n\nnon_diegetic_music: N/A",
+      "offload_mode": "block",
+      "mlp_chunk_tokens": 8192,
+      "prefetch_depth": 1,
+      "resident_block_count": 0,
+      "vae_tile_size": 288,
+      "vae_tile_batch_size": 1
+    }
+  ]
+}

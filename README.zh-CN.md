@@ -3,26 +3,42 @@
 [English](README.md) · **简体中文**
 
 X-MinimaxH3 是面向单张 NVIDIA SM89 GPU 优化的 MiniMax H3 本地视频生成服务。
-项目通过统一的中英文 Web 控制台和 REST API 提供 FL2VA、Ref2VA、Base/LoRA
-热切换、分档显存执行、断点预览以及 H3 原生二次采样。
+中英文 Web 控制台与 REST API 覆盖单视频创作、长视频创作和任务中心，并提供
+FL2VA/Ref2VA、Base/LoRA、SelfLift 渐进生成、保留 latent 的全片终采和自动人脸修复。
 
 > 本源码仓库不分发模型权重、用户上传文件、中间 latent 或生成视频。
 
 ## 主要能力
 
-- 统一用户控制面：只需要设定总采样步数和连续的 `0–100` 加速力度。
+- 统一的双端点采样轨迹：一采/终采步数与分辨率使用同一根轴，两个阶段的加速力度
+  可以分别调整。
 - Base 联合调度器统一安排真实 DiT 计算、预测计算以及逐步逐层 Attention 预算。
-- 六个相互隔离的启动器：FL2VA 与 Ref2VA 分别对应逻辑 24GB INT8、16GB
-  INT8 和 8GB W4A8 档位。
-- 在相应档位允许范围内提供 360p–1080p 原生生成；INT8 档位可进行最高
-  1440p 的 H3 原生二次采样。
+- 四个公开模型入口：W4A8/INT8 × FL2VA/Ref2VA；内部8GB、16GB、24GB显存
+  执行器由后端自动选择。
+- 自动完成资源路由，执行计划在加载模型时编译，不进入 DiT 逐步热循环。
+- SelfLift 渐进生成：前段在较小画布运行，以 H3 学习式 3D latent 放大器升维，
+  再在高分辨率画布完成尾步；INT8 档位最高可到 1440P。
+- 长视频在线创作只生成累计低清预览并保留干净终采分支；JSON 一键创作跳过
+  无用的中间预览解码，直接生成高清成片。Ref2VA JSON 每个窗口可声明一套完整且
+  独立的 Picture/Audio 参考集；省略时继承上一窗口，服务端本机路径不会公开返回。
+- 全片终采沿一条连续的低分辨率 latent 时间轴运行，可选 3–8 秒滑窗、重叠融合、
+  音频 token 固定、终采 Sigma 调节和一次统一解码。
+- FL2VA 自动人脸修复会对欠清晰的人脸轨迹排序，将目标区域排入方形 Atlas，
+  使用四步 H3 Turbo 完成批量修复。
 - FL2VA 支持纯文本、首帧、尾帧和首尾帧约束。
 - Ref2VA 支持参考图片、参考视频和独立参考音频。
 - 内置 Larry Turbo 与三套任务型 LightX2V LoRA 配置。
-- 可恢复断点任务和固定低成本预览。
+- 可配置 1–4 步分叉预览，预览支路不会修改保留的正式采样状态。
 - 串行 GPU 队列、任务取消、历史记录和每秒硬件监控。
 - 可选 ComfyUI HTTP 连接器，不会在 ComfyUI 中重复加载一套 H3。
 - 控制台和主要用户文档均支持英文与简体中文。
+
+## AI 提示词写作规范
+
+[`ai-prompt-guides/`](ai-prompt-guides/) 内含六份可独立上传给 ChatGPT 或其他 AI 的中文
+TXT 规范，覆盖 FL2VA 与 Ref2VA 的单视频、长视频在线逐窗和长视频 JSON 一键生成。
+每份文件都规定了 AI 应询问的信息、H3 写作规则以及可以直接粘贴进工作台的输出格式。
+使用时只需上传与当前任务对应的一份文件。
 
 ## 视频教程
 
@@ -45,16 +61,19 @@ X-MinimaxH3 是面向单张 NVIDIA SM89 GPU 优化的 MiniMax H3 本地视频生
 128GB 内存、RTX 4090 24GB，使用 INT8 FL2VA。
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV1Sm4C6VEhf/">
-    <img src="assets/demos/effect-comparison-zh-cover.jpg" width="860" alt="前往哔哩哔哩观看 X-MinimaxH3 中文效果对比视频">
-  </a><br>
-  <strong>▶ 前往哔哩哔哩观看中文效果对比视频</strong>
+  <video controls muted loop playsinline width="860" src="assets/demos/effect-comparison-zh.mp4">
+    浏览器不支持内嵌视频播放。
+  </video>
+</p>
+
+<p align="center">
+  <a href="assets/demos/effect-comparison-zh.mp4">▶ 在线观看或下载中文效果对比视频</a>
 </p>
 
 ## 交流与反馈
 
 国际用户可在 [GitHub Discussions](https://github.com/PullMyBoots/X-MinimaxH3/discussions)
-交流安装、硬件兼容性、性能测试、ComfyUI/API 接入和生成作品。实时交流可加入
+交流安装、硬件兼容性、性能测试、API 接入和生成作品。实时交流可加入
 [Telegram 公开群](https://t.me/XMinimaxH3Community)。中文用户也欢迎加入微信群，
 或添加作者微信直接反馈。
 
@@ -63,7 +82,7 @@ X-MinimaxH3 是面向单张 NVIDIA SM89 GPU 优化的 MiniMax H3 本地视频生
 | <a href="https://t.me/XMinimaxH3Community"><img src="assets/community/telegram-community.png" width="260" alt="X-MinimaxH3 Telegram 社群二维码"></a> | <img src="assets/community/wechat-contact.jpg" width="260" alt="作者微信二维码"> | <img src="assets/community/wechat-group.jpg" width="260" alt="X-MinimaxH3 微信交流群二维码"> |
 | [打开公开群](https://t.me/XMinimaxH3Community) | 请备注 `X-MinimaxH3` | 群二维码过期后会在这里更新 |
 
-对于能够复现的 Bug，请优先提交到
+对于能够复现的 Bug 和功能建议，请优先提交到
 [GitHub Issues](https://github.com/PullMyBoots/X-MinimaxH3/issues)，方便长期检索问题和解决方案。
 
 ## 已验证平台
@@ -76,7 +95,7 @@ X-MinimaxH3 是面向单张 NVIDIA SM89 GPU 优化的 MiniMax H3 本地视频生
 | PyTorch | 2.13.0+cu130 |
 | PyTorch CUDA Runtime | 13.0 |
 | 服务编译工具链 | CUDA 13.3 |
-| 主机内存 | 建议至少 64GB 有效内存；长视频和高分辨率任务建议更多 |
+| 主机内存 | 建议 64GB 或以上；运行时自动选择常驻策略 |
 
 其他 GPU 架构尚未作为发布平台验收。逻辑 8GB/16GB 路线是在 SM89 上通过
 显存硬上限测试的；同容量物理显卡仍需要单独进行设备级验证。
@@ -89,7 +108,7 @@ X-MinimaxH3 是面向单张 NVIDIA SM89 GPU 优化的 MiniMax H3 本地视频生
 `models/manifest.json` 声明的全部权重：
 
 ```bash
-git clone <你的 GitHub 仓库地址> X-MinimaxH3
+git clone https://github.com/PullMyBoots/X-MinimaxH3.git
 cd X-MinimaxH3
 ./setup.sh --download-models --accept-model-license
 ./run.sh
@@ -132,30 +151,39 @@ cd X-MinimaxH3
 ./test.sh
 ```
 
-当前发布版的验收结果：
+当前源码、Web UI、API 契约、长视频/SelfLift、人脸修复、发布包边界和 ComfyUI
+连接器均纳入发布回归测试。精确测试数量和解压后复测结果记录在
+[VALIDATION.md](VALIDATION.md)；模型哈希与此前 RTX 4090 真实生成矩阵继续作为
+历史硬件证据保留。
 
-- 709 项发布回归测试通过，4 项跳过，0 项失败；另有24项ComfyUI连接器测试全部通过；
-- 清单声明的 12 个模型工件全部通过精确大小和 SHA-256 检查；
-- 六个启动器以及 SM89 INT8/W4A8 内核 smoke test 全部通过；
-- Base FL2VA、LightX2V FL2VA 4步/8步、LightX2V Ref2VA 4步均完成真实
-  MP4 生成。
+## 自动资源执行
 
-详细命令、耗时和结果哈希见 [VALIDATION.md](VALIDATION.md)。
+控制台只显示`W4A8 · FL2VA`、`W4A8 · Ref2VA`、`INT8 · FL2VA`和
+`INT8 · Ref2VA`四个入口。加载权重前自动检测显存：
 
-## 资源档位
+| 检测显存 | 内部执行器 | 可用权重 | 原生首遍生成 | H3原生二次采样 |
+|---|---|---|---|---|
+| 8–15GB | 8GB | W4A8 | 单个原生窗最高720p × 15秒；支持无感长时请求 | 最高1080p |
+| 16–23GB | 16GB | W4A8或INT8 | 两种权重均实验性开放最高1080p原生窗；支持无感长时请求 | W4A8最高1080p；INT8最高1440p |
+| 24GB及以上 | 24GB | W4A8或INT8 | 两种权重均开放最高1080p原生窗；支持无感长时请求 | W4A8最高1080p；INT8最高1440p |
 
-| 档位 | 权重 | 原生首遍生成 | H3 原生二次采样 |
-|---|---|---|---|
-| 24GB | INT8 | 最高 1080p × 15秒 | 最高 1440p |
-| 16GB | INT8 | 实验性最高 1080p × 15秒 | 最高 1440p |
-| 8GB | W4A8 | 最高 720p × 15秒 | 最高 1080p |
+Web控制台、REST API和生成节点接受1–300秒。超过单个物理原生窗的请求会自动
+使用39帧干净联合音视频前缀和一次最终解码。当前真实成片发布门覆盖480P×30秒、
+Base 20步、加速75；更高分辨率和更长时长仍应在目标部署上验收。机制与逐帧验收
+证据见[`docs/TRANSPARENT_LONG_HORIZON_2026_09_01.md`](docs/TRANSPARENT_LONG_HORIZON_2026_09_01.md)。
+
+运行时在内部管理 H3、Qwen、VAE 和子进程的常驻关系。资源计划只在模型加载时
+完成编译，不会在每个 DiT step 运行 Python 路由。
+
+9月1日资源门以少步高加速完整跑通23/23行：覆盖8/16/24GB矩阵的全部FL2VA
+分辨率，并为每个后端补充一条真实单图Ref2VA边界任务。详见[VALIDATION.md](VALIDATION.md)。
 
 超出当前后端能力边界的任务会被明确拒绝，不会静默切换到其他后端。运行服务
 返回的分辨率、时长和参考媒体限制才是当前档位的最终有效边界。
 
-设置页可把H3二次采样的时间上下文设为68–362帧。短窗口通常降低单个DiT窗口的
-延迟，长窗口保留更多动作与身份连续性；H3时间相位对齐、17帧Overlap、latent
-交叉融合以及显存不足时的安全缩窗仍由后端自动处理。
+设置页可开启 3–8 秒的终采时间滑窗。较短窗口降低单窗延迟和峰值显存，较长窗口
+保留更多动作上下文；时间相位对齐、重叠融合、音频 token 固定和显存安全缩窗由
+后端自动处理。
 
 ## LoRA 配置
 
@@ -174,7 +202,7 @@ LightX2V 的 FL2VA 与 Ref2VA LoRA 属于不同任务族，不能互换。设置
 完整说明见[中文 ComfyUI 指南](integrations/comfyui/README.md)或
 [English ComfyUI guide](integrations/comfyui/README.en.md)。
 
-先启动 X-MinimaxH3 并在控制台选择启动器，然后执行：
+先启动X-MinimaxH3并在控制台选择四个模型入口之一，然后执行：
 
 ```bash
 ./integrations/comfyui/start_comfyui.sh
@@ -191,6 +219,7 @@ LightX2V 的 FL2VA 与 Ref2VA LoRA 属于不同任务族，不能互换。设置
 h3serve/                 Web/API、队列、调度器与 H3 原生运行时
 backends/                SM89 算子和经过审计的窄化二进制运行时
 static/                  中英文 Web 控制台
+ai-prompt-guides/        六种 AI 提示词写作与输出规范
 integrations/comfyui/    可选连接器与示例工作流
 models/manifest.json     权重来源、大小和 SHA-256 契约
 scripts/                 安装、启动、验收和研究工具
@@ -205,6 +234,9 @@ docs/                    用户、部署与架构文档
 - [English user guide](docs/USER_GUIDE.en.md)
 - [English deployment guide](docs/DEPLOYMENT.en.md)
 - [原生引擎架构](docs/NATIVE_ENGINE_ARCHITECTURE.md)
+- [SelfLift 渐进生成](docs/SELFLIFT_PROGRESSIVE_GENERATION.md)
+- [长视频创作台 v3](docs/INFINITE_CREATION_STUDIO_V3.md)
+- [自动显存路由与主机内存硬预算](docs/AUTOMATIC_RESOURCE_BUDGET_2026_08_31.md)
 - [第三方组件声明](THIRD_PARTY_NOTICES.md)
 - [发布验收记录](VALIDATION.md)
 
@@ -225,9 +257,16 @@ X-MinimaxH3 建立在 MiniMax H3 社区多项重要工作的基础上，特别�
 - [Comfyui Minimax H3 Latent Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)：
   提供学习式 3D latent 放大网络的架构和公开权重，用于构造 H3 二次采样的高分辨率
   初始 latent。
+- [comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift)：其渐进式干净端点
+  升维机制为本项目原生 H3 双分辨率轨迹提供了参考；本仓库没有嵌入其运行时代码。
 - [SageAttention](https://github.com/thu-ml/SageAttention)：提供量化稠密
   Attention 算子及其实现基础。本项目围绕该基础进一步完成了 H3 专用布局、量化、
   长序列稳定性与统一调度器集成。
+- [ComfyUI-H3-Continuum](https://github.com/ukr8b3g-cmyk/ComfyUI-H3-Continuum)：
+  公开并验证了遮罩式联合音视频前缀机制，为本项目原生无感长时执行器提供了关键参考。
+- [ComfyUI-MiniMax-H3-LongMedia](https://github.com/vizart-vj/ComfyUI-MiniMax-H3-LongMedia)：
+  提供长媒体系统实现参考。本项目没有嵌入其ComfyUI猴子补丁运行时，而是独立吸收了
+  单模型生命周期、延迟解码和提示词局部时间轴等兼容原则。
 
 以上上游项目不隶属于 X-MinimaxH3，也不对本项目负责；其原始许可证和声明继续
 有效，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

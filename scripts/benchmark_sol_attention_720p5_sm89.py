@@ -17,10 +17,10 @@ import torch
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     workspace = root.parents[1]
-    old_serve = workspace / "."
+    old_serve = workspace / "subprojects-main/main/release/serve"
     sol_source = (
         workspace
-        / "docs/research/sources/projects/sana_sol"
+        / "subprojects-main/main/DIT-knowledge/sources/projects/sana_sol"
     )
     parser = argparse.ArgumentParser()
     parser.add_argument("--sequence", type=int, default=34871)

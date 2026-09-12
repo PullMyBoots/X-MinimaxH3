@@ -17,6 +17,7 @@ from ..memory_policy import HOST_MEMORY_PROFILES, HostMemoryProfile
 from ..lora_registry import resolve_lora_profile
 from .hot_session import NativeT2AVHotSession
 from .local_checkpoint_cache import (
+    drop_file_page_cache,
     materialize_local_checkpoint,
     materialize_qwen_layer_cache,
     should_localize_checkpoint,
@@ -159,6 +160,11 @@ class BuiltNativeSession:
     startup_tasks: dict[str, float]
     qwen_storage: str = "source"
     qwen_layer_cache: bool = False
+    host_memory_profile: str = "fullspeed"
+    dit_host_pinned: bool = False
+    dit_host_cache_gib: float = 0.0
+    dit_host_pinned_gib: float = 0.0
+    dit_host_pinned_fraction: float = 0.0
     v19_release_bundle: str | None = None
     v19_release_digest: str | None = None
     pareto_policy_id: str | None = None
@@ -207,18 +213,29 @@ class NativeSessionFactory:
     def set_lora_checkpoint(self, checkpoint: Path) -> None:
         """Select one administrator-installed H3 LoRA for the next build."""
 
-        candidate = Path(checkpoint).expanduser().absolute()
-        lora_root = (self.paths.model_root / "loras").absolute()
-        try:
-            relative = candidate.relative_to(lora_root)
-        except ValueError as error:
-            raise ValueError("LoRA checkpoint must stay inside models/loras") from error
-        if ".." in relative.parts:
-            raise ValueError("LoRA checkpoint must stay inside models/loras")
+        # Public releases commonly keep ``models`` as a symlink into the
+        # Linux-local weight store.  Compare canonical targets so a legitimate
+        # checkpoint reached through that symlink is not rejected as escaping
+        # models/loras.
+        candidate = Path(checkpoint).expanduser().resolve()
+        lora_root = (self.paths.model_root / "loras").resolve()
+        allowed_targets = {
+            item.resolve()
+            for item in lora_root.rglob("*.safetensors")
+            if item.is_file()
+        }
+        if candidate not in allowed_targets:
+            raise ValueError("LoRA checkpoint must be installed inside models/loras")
         if candidate.suffix.lower() != ".safetensors" or not candidate.is_file():
             raise ValueError("selected LoRA checkpoint is not a safetensors file")
         self._lora_checkpoint = candidate
         self._lora_profile = resolve_lora_profile(candidate)
+
+    @property
+    def lora_checkpoint(self) -> Path:
+        """Return the selected administrator LoRA without exposing internals."""
+
+        return Path(self._lora_checkpoint)
 
     def set_output_root(self, output_root: Path) -> None:
         """Retarget future sessions while the owning hot engine is cold."""
@@ -446,17 +463,34 @@ class NativeSessionFactory:
             raise RuntimeError(f"native {engine} runtime is incomplete: {missing}")
         if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (8, 9):
             raise RuntimeError("native H3 release requires one RTX 4090 / SM89 GPU")
-        runtime_config = RuntimeConfig.for_cuda_device(
-            weight_tier=weight_tier,
-            provisioned_limit_gib={"24gb": 24.0, "16gb": 16.0, "8gb": 8.0}[
-                vram_profile
-            ],
-            backend_profile={
-                "24gb": "int8_24gb",
-                "16gb": "int8_16gb",
-                "8gb": "w4a8_8gb",
-            }[vram_profile],
-        )
+        research_w4_vram = os.environ.get(
+            "H3_NATIVE_RESEARCH_W4_VRAM_GIB", ""
+        ).strip()
+        if research_w4_vram and weight_tier == "w4a8":
+            try:
+                research_w4_vram_gib = float(research_w4_vram)
+            except ValueError as error:
+                raise ValueError(
+                    "H3_NATIVE_RESEARCH_W4_VRAM_GIB must be numeric"
+                ) from error
+            if not 8.0 <= research_w4_vram_gib <= 24.0:
+                raise ValueError(
+                    "H3_NATIVE_RESEARCH_W4_VRAM_GIB must lie inside [8, 24]"
+                )
+            # Research-only capacity sweep.  Leaving backend_profile unset
+            # retains W4 kernels and execution preferences while allowing the
+            # allocator to expose more than the public 8-GiB product tier.
+            runtime_config = RuntimeConfig.for_cuda_device(
+                weight_tier="w4a8",
+                provisioned_limit_gib=research_w4_vram_gib,
+                backend_profile=None,
+            )
+        else:
+            runtime_config = RuntimeConfig.for_cuda_device(
+                weight_tier=weight_tier,
+                provisioned_limit_gib=resource_backend.provisioned_gib,
+                backend_profile=resource_backend.profile_id,
+            )
         # A VRAM profile is a physical contract, not a planner hint. Apply the
         # allocator ceiling before CUDA smoke tests or model construction, so
         # a 16GB launcher running on a 24GB development card cannot borrow the
@@ -617,12 +651,13 @@ class NativeSessionFactory:
         # where thousands of layer-local tensor reads dominate every new
         # prompt. Keep a byte-identical, reclaimable ext4 disk copy instead.
         # This is storage locality, not a second resident weight cache.
+        stream_qwen_weights = not self.memory_profile.cache_qwen_weights
         text = (
             timed(
                 "qwen_native_checkpoint",
                 lambda: materialize_local_checkpoint(text_source),
             )
-            if self.memory_profile.key == "compact"
+            if stream_qwen_weights
             else text_source
         )
         self._progress(12, "text_encoder", "准备Qwen文本编码器")
@@ -632,18 +667,18 @@ class NativeSessionFactory:
                 "qwen_layer_cache",
                 lambda: materialize_qwen_layer_cache(text),
             )
-            if self.memory_profile.key == "compact"
+            if stream_qwen_weights
             else None
         )
-        if self.memory_profile.key == "compact":
+        if stream_qwen_weights:
             if qwen_storage == "native_cache":
                 print(
-                    "64GB Qwen storage: Linux native cache ready",
+                    f"{self.memory_profile.label} Qwen storage: Linux native cache ready",
                     flush=True,
                 )
             elif should_localize_checkpoint(text_source):
                 print(
-                    "WARNING: 64GB Qwen storage is still on a WSL cross-drive "
+                    f"WARNING: {self.memory_profile.label} Qwen storage is still on a WSL cross-drive "
                     "mount; generation remains available but new-prompt latency "
                     "will be higher. Check Linux cache disk space or "
                     "H3_SERVE_LOCAL_MODEL_CACHE.",
@@ -651,7 +686,7 @@ class NativeSessionFactory:
                 )
             if qwen_layer_cache is not None:
                 print(
-                    "64GB Qwen streaming: execution-ordered layer cache ready",
+                    f"{self.memory_profile.label} Qwen streaming: execution-ordered layer cache ready",
                     flush=True,
                 )
         conditioner = PackedQwen3VLT2AVConditioner(
@@ -697,12 +732,118 @@ class NativeSessionFactory:
 
             model = timed("dit_graph_assembly", assemble_dit)
             model.eval().requires_grad_(False)
+            research_pin_raw = os.environ.get(
+                "H3_NATIVE_RESEARCH_PIN_TRANSFORMER_GIB", ""
+            ).strip()
+            pin_budget_bytes = (
+                None
+                if self.memory_profile.pin_transformer_budget_gib is None
+                else int(
+                    self.memory_profile.pin_transformer_budget_gib * 1024**3
+                )
+            )
+            if research_pin_raw:
+                try:
+                    research_pin_gib = float(research_pin_raw)
+                except ValueError as error:
+                    raise ValueError(
+                        "H3_NATIVE_RESEARCH_PIN_TRANSFORMER_GIB must be numeric"
+                    ) from error
+                if research_pin_gib < 0.0:
+                    raise ValueError(
+                        "H3_NATIVE_RESEARCH_PIN_TRANSFORMER_GIB cannot be negative"
+                    )
+                pin_budget_bytes = int(research_pin_gib * 1024**3)
+            research_resident_raw = os.environ.get(
+                "H3_NATIVE_RESEARCH_RESIDENT_BLOCKS", ""
+            ).strip()
+            try:
+                resident_blocks = (
+                    int(research_resident_raw)
+                    if research_resident_raw
+                    else int(self.memory_profile.resident_transformer_blocks)
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "H3_NATIVE_RESEARCH_RESIDENT_BLOCKS must be an integer"
+                ) from error
+            block_count = len(model.block_stack.blocks)
+            if not 0 <= resident_blocks < block_count:
+                raise ValueError(
+                    "H3_NATIVE_RESEARCH_RESIDENT_BLOCKS must leave at least one block offloaded"
+                )
+            pin_transformer = (
+                self.memory_profile.pin_model_weights
+                or self.memory_profile.pin_transformer_weights
+                or (pin_budget_bytes is not None and pin_budget_bytes > 0)
+            )
+            copy_transformer = (
+                self.memory_profile.copy_model_weights
+                or self.memory_profile.copy_transformer_weights
+            )
+            release_threshold = 256 * 1024**2
+            copied_since_release = 0
+
+            def release_copied_checkpoint_pages(copied_bytes: int) -> None:
+                nonlocal copied_since_release
+                copied_since_release += int(copied_bytes)
+                if copied_since_release >= release_threshold:
+                    # Packing touches mmap-backed source pages. Evict clean
+                    # pages incrementally so cold construction never holds a
+                    # complete 12.5 GiB source copy beside the pinned master.
+                    drop_file_page_cache(base)
+                    copied_since_release = 0
+
             residency = ImmutablePinnedModuleResidency(
                 "transformer", model,
-                pin_host_weights=self.memory_profile.pin_model_weights,
-                copy_host_weights=self.memory_profile.copy_model_weights,
+                pin_host_weights=pin_transformer,
+                copy_host_weights=copy_transformer,
+                source_copied=(
+                    release_copied_checkpoint_pages
+                    if (
+                        self.memory_profile.pin_transformer_weights
+                        or (
+                            pin_budget_bytes is not None
+                            and pin_budget_bytes > 0
+                        )
+                    )
+                    else None
+                ),
+                pin_host_budget_bytes=pin_budget_bytes,
+                pin_host_module_prefixes=(
+                    tuple(
+                        f"block_stack.blocks.{index}"
+                        for index in range(resident_blocks, block_count)
+                    )
+                    if pin_budget_bytes is not None
+                    else None
+                ),
             )
-            timed("dit_pin_host", residency.prepare_host)
+            try:
+                timed("dit_pin_host", residency.prepare_host)
+            except (RuntimeError, MemoryError) as error:
+                if not pin_transformer:
+                    raise
+                # Other applications can consume RAM between admission and
+                # model construction.  Preserve service availability by
+                # falling back to the already validated pageable masters.
+                print(
+                    f"WARNING: {self.memory_profile.label} DiT pinned cache "
+                    f"unavailable ({error}); using low-RAM streaming",
+                    flush=True,
+                )
+                gc.collect()
+                residency = ImmutablePinnedModuleResidency(
+                    "transformer", model,
+                    pin_host_weights=False,
+                    copy_host_weights=False,
+                )
+                timed("dit_streaming_fallback", residency.prepare_host)
+            if residency.host_is_pinned:
+                # The immutable pinned masters now own every byte used by DiT.
+                # Evict the clean checkpoint mmap pages touched while packing
+                # so they do not count twice against the 32 GiB host budget.
+                drop_file_page_cache(base)
             return residency
 
         def prepare_video():
@@ -852,6 +993,7 @@ class NativeSessionFactory:
                 video_std,
                 frame_count,
                 output_dtype="uint8",
+                cuda_allocator_ceiling_bytes=runtime_config.max_device_bytes,
             )
 
         frame_adapter = H3VideoVAEAdapter(
@@ -951,6 +1093,13 @@ class NativeSessionFactory:
             lora_profile_id=lora_profile.profile_id,
             lora_recommended_steps=lora_profile.recommended_steps,
             lora_default_steps=lora_profile.default_steps,
+            prefer_pinned_weight_prefetch=(
+                weight_tier == "w4a8"
+                and transformer.host_pinned_bytes > 0
+            ),
+            resident_transformer_blocks=(
+                self.memory_profile.resident_transformer_blocks
+            ),
         )
         self._progress(98, "finalize", "完成调度器与运行时会话初始化")
         return BuiltNativeSession(
@@ -959,6 +1108,11 @@ class NativeSessionFactory:
             startup_tasks=task_seconds,
             qwen_storage=qwen_storage,
             qwen_layer_cache=qwen_layer_cache is not None,
+            host_memory_profile=self.memory_profile.key,
+            dit_host_pinned=transformer.host_is_pinned,
+            dit_host_cache_gib=transformer.host_allocated_bytes / 1024**3,
+            dit_host_pinned_gib=transformer.host_pinned_bytes / 1024**3,
+            dit_host_pinned_fraction=transformer.host_pinned_fraction,
             v19_release_bundle=v19_bundle_source,
             v19_release_digest=v19_bundle_digest,
             pareto_policy_id=pareto_policy_id,

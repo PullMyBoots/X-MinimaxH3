@@ -85,16 +85,25 @@ def _audio_stereo(audio: Any):
 def normalize_h3_audio_loudness(audio: Any):
     """Apply the established H3 post-VAE loudness rule.
 
-    Per batch, divide all channels/samples by ``max(std * 5, 1)`` and clamp to
-    the codec's legal float range. NumPy ``ddof=1`` matches PyTorch's default
-    sample-standard-deviation correction used by the prior correct pipeline.
+    Per batch, divide all channels/samples by ``max(std * 5, peak / 0.9, 1)``.
+    The prior rule hard-clipped sparse Audio-VAE peaks whenever the track's
+    global standard deviation stayed below 0.2.  Those flat-topped transients
+    occurred disproportionately in later long-video windows and are perceived
+    as harsh or under-denoised speech.  Peak-safe scaling preserves the entire
+    waveform shape and leaves already-safe tracks bit-identical.  The 0.9
+    ceiling also leaves headroom for AAC inter-sample overshoot.  NumPy
+    ``ddof=1`` matches PyTorch's historical sample-standard-deviation rule.
     """
 
     np = _numpy()
     stereo = _audio_stereo(audio)[None, ...]
-    divisor = np.std(stereo, axis=(1, 2), keepdims=True, ddof=1) * 5.0
-    divisor = np.maximum(divisor, 1.0)
-    return np.clip(stereo / divisor, -1.0, 1.0)[0].astype(np.float32, copy=False)
+    loudness_divisor = np.std(
+        stereo, axis=(1, 2), keepdims=True, ddof=1
+    ) * 5.0
+    peak = np.max(np.abs(stereo), axis=(1, 2), keepdims=True)
+    peak_divisor = peak / 0.9
+    divisor = np.maximum(np.maximum(loudness_divisor, peak_divisor), 1.0)
+    return (stereo / divisor)[0].astype(np.float32, copy=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,10 +320,13 @@ class AtomicPyAVMuxer:
         destination.parent.mkdir(parents=True, exist_ok=True)
         cancel_check()
 
-        frames = _video_uint8(video)
-        waveform = normalize_h3_audio_loudness(audio)
-        expected_samples = int(round(frames.shape[0] / float(fps) * sample_rate))
         np = _numpy()
+        frames = _video_uint8(video)
+        source_waveform = _audio_stereo(audio)
+        source_peak = float(np.max(np.abs(source_waveform)))
+        waveform = normalize_h3_audio_loudness(source_waveform)
+        normalized_peak = float(np.max(np.abs(waveform)))
+        expected_samples = int(round(frames.shape[0] / float(fps) * sample_rate))
         if waveform.shape[1] < expected_samples:
             waveform = np.pad(waveform, ((0, 0), (0, expected_samples - waveform.shape[1])))
         else:
@@ -371,6 +383,16 @@ class AtomicPyAVMuxer:
                     "video_preset": self.config.video_preset,
                     "audio_codec": self.config.audio_codec,
                     "audio_bit_rate": self.config.audio_bit_rate,
+                    "audio_normalization": {
+                        "policy": "std5_peak0p9_shape_preserving_v2",
+                        "input_peak": source_peak,
+                        "normalized_peak": normalized_peak,
+                        "linear_gain": (
+                            normalized_peak / source_peak
+                            if source_peak > 0.0 else 1.0
+                        ),
+                        "hard_clipped_samples": 0,
+                    },
                     "validation_mode": self.config.validation_mode,
                 },
             }

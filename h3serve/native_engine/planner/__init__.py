@@ -23,10 +23,13 @@ from .memory_execution import (
     MemoryExecutionDecision,
     MemoryExecutionMode,
     estimate_compact_streaming_peak_bytes,
+    estimate_dense_actual_peak_bytes,
     estimate_performance_peak_bytes,
     estimate_streaming_peak_bytes,
     estimate_vae_host_streaming_peak_bytes,
     estimate_vae_materialized_peak_bytes,
+    estimate_vae_postprocess_peak_bytes,
+    select_dense_safe_resident_blocks,
     select_vae_temporal_host_chunk,
     select_memory_execution,
 )

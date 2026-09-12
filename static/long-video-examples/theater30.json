@@ -1,0 +1,254 @@
+{
+  "model_variant": "lora",
+  "resolution": "480p",
+  "aspect_ratio": "16:9",
+  "sampling_steps": 7,
+  "acceleration": 0,
+  "seed": 95001,
+  "long_video": {
+    "version": 2,
+    "overlap_seconds": 1.625,
+    "max_window_seconds": 15,
+    "memory": 60,
+    "story": {
+      "overview": "Realistic live action in the same connected historic theatre before dawn. Preserve exactly one stage manager, her face, proportions, wardrobe, voice, and every unique prop for the full video.",
+      "entities": {
+        "manager": {
+          "kind": "character",
+          "identity": "One middle-aged East Asian female stage manager with one chin-length dark bob, navy-blue work coveralls, a rust-red scarf, brown leather boots, and one calm low adult voice."
+        },
+        "theatre": {
+          "kind": "location",
+          "identity": "One connected historic theatre before dawn: a narrow backstage corridor with a fixed green door and yellow ladder leads around one corner to a side-stage rope rail, a red velvet curtain, and one wooden stage facing empty burgundy seats."
+        },
+        "board": {
+          "kind": "prop",
+          "identity": "One cobalt-blue clipboard with one silver top clip."
+        },
+        "flashlight": {
+          "kind": "prop",
+          "identity": "One compact brass flashlight with a narrow warm beam when powered on."
+        },
+        "shelf": {
+          "kind": "prop",
+          "identity": "One narrow wooden shelf beside the side-stage rope rail."
+        },
+        "rope": {
+          "kind": "prop",
+          "identity": "One beige curtain rope beside the red velvet curtain."
+        },
+        "stool": {
+          "kind": "prop",
+          "identity": "One plain wooden stool."
+        },
+        "lamp": {
+          "kind": "prop",
+          "identity": "One low brass work lamp."
+        }
+      },
+      "initial_state": {
+        "manager": {
+          "location": "backstage corridor in {{theatre}}",
+          "pose": "walking toward camera",
+          "left_hand": "holds {{board}}",
+          "right_hand": "holds {{flashlight}}",
+          "speech": "silent"
+        },
+        "theatre": {
+          "layout": "fixed and physically connected",
+          "time": "before dawn"
+        },
+        "board": {
+          "location": "{{manager}} left hand",
+          "holder": "{{manager}}"
+        },
+        "flashlight": {
+          "location": "{{manager}} right hand",
+          "holder": "{{manager}}",
+          "power": "on"
+        },
+        "shelf": {
+          "location": "side-stage rope rail",
+          "visibility": "offscreen ahead"
+        },
+        "rope": {
+          "location": "beside red curtain",
+          "motion": "still",
+          "visibility": "offscreen ahead"
+        },
+        "stool": {
+          "location": "centre stage",
+          "visibility": "offscreen ahead"
+        },
+        "lamp": {
+          "location": "beside {{stool}}",
+          "power": "off",
+          "visibility": "offscreen ahead"
+        }
+      },
+      "shots": [
+        {
+          "id": "continuous_take",
+          "camera_style": "One uninterrupted Steadicam take with one continuous lens and physically plausible walking-speed motion. Preserve camera direction, velocity, theatre geography and screen direction across every window. No cut, reset, teleport, hidden transition or morph.",
+          "overall_soundscape": "Low ventilation and faint rain on the theatre roof remain continuous. Footsteps change naturally from concrete to hollow wood. Object sounds occur only with visible actions.",
+          "non_diegetic_music": "N/A",
+          "segments": [
+            {
+              "id": "corridor",
+              "duration_seconds": 10,
+              "transition": "opening",
+              "camera": {
+                "composition": "A medium-wide frontal view of {{manager}} in the backstage corridor, camera moving backward at her walking speed.",
+                "motion": "Track backward smoothly; from 00:08.000 begin one continuous shallow left arc with her turn, without changing lens or cutting.",
+                "end": "Three-quarter frontal view at the corridor corner, still moving through the same left arc."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0,
+                  "end_seconds": 8,
+                  "text": "{{manager}} walks steadily down the corridor; {{flashlight}} beam crosses the fixed green door and yellow ladder.",
+                  "state_updates": {}
+                },
+                {
+                  "start_seconds": 8,
+                  "end_seconds": 9.75,
+                  "text": "{{manager}} begins the single left turn toward {{rope}}; her feet, body and camera follow the same continuous arc.",
+                  "state_updates": {
+                    "manager": {
+                      "location": "corridor corner",
+                      "pose": "midway through one left turn"
+                    }
+                  }
+                }
+              ],
+              "dialogue": [
+                {
+                  "start_seconds": 4,
+                  "end_seconds": 6.8,
+                  "speaker": "manager",
+                  "language": "Chinese",
+                  "text": "三号灯位确认，接着检查主幕。"
+                }
+              ]
+            },
+            {
+              "id": "rope_check",
+              "duration_seconds": 10,
+              "transition": "continue",
+              "camera": {
+                "motion": "Finish the already visible left arc, settle into a rear three-quarter follow as {{manager}} reaches {{shelf}}, then follow behind her toward the curtain gap without changing lens.",
+                "end": "Rear three-quarter follow immediately behind {{manager}} as she crosses the curtain gap toward the stage."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0,
+                  "end_seconds": 2.2,
+                  "text": "Continue the turn already in progress until {{manager}} reaches {{shelf}} beside {{rope}}.",
+                  "state_updates": {}
+                },
+                {
+                  "start_seconds": 2.2,
+                  "end_seconds": 6.2,
+                  "text": "{{manager}} places {{flashlight}} once on {{shelf}}, pulls {{rope}} downward once with her freed right hand, then releases it.",
+                  "state_updates": {
+                    "flashlight": {
+                      "location": "{{shelf}}",
+                      "holder": null
+                    },
+                    "rope": {
+                      "motion": "one completed pull, now released",
+                      "visibility": "visible"
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 6.2,
+                  "end_seconds": 9.75,
+                  "text": "She retrieves the same {{flashlight}} and walks through the curtain gap toward the stage while the camera follows continuously.",
+                  "state_updates": {
+                    "manager": {
+                      "location": "crossing curtain gap toward stage",
+                      "pose": "walking away from camera",
+                      "right_hand": "holds {{flashlight}}"
+                    },
+                    "flashlight": {
+                      "location": "{{manager}} right hand",
+                      "holder": "{{manager}}"
+                    },
+                    "shelf": {
+                      "location": "side-stage rope rail",
+                      "visibility": "behind camera"
+                    }
+                  }
+                }
+              ],
+              "dialogue": []
+            },
+            {
+              "id": "stage_setup",
+              "duration_seconds": 10,
+              "transition": "continue",
+              "camera": {
+                "motion": "Continue the rear three-quarter follow onto the wooden stage. After she passes {{stool}}, make one slow continuous lateral arc around her left side; never jump to the opposite angle.",
+                "end": "Front-left three-quarter medium view four steps downstage from {{stool}}, with the same arc nearly settled."
+              },
+              "beats": [
+                {
+                  "start_seconds": 0,
+                  "end_seconds": 3,
+                  "text": "{{manager}} continues through the curtain gap and walks to {{stool}} and {{lamp}}.",
+                  "state_updates": {}
+                },
+                {
+                  "start_seconds": 3,
+                  "end_seconds": 6.5,
+                  "text": "She places {{board}} flat on {{stool}}, fully releases it, and switches on {{lamp}} once with her empty left hand.",
+                  "state_updates": {
+                    "manager": {
+                      "location": "beside {{stool}}",
+                      "pose": "standing",
+                      "left_hand": "empty"
+                    },
+                    "board": {
+                      "location": "flat on {{stool}}",
+                      "holder": null
+                    },
+                    "lamp": {
+                      "location": "beside {{stool}}",
+                      "power": "on",
+                      "visibility": "visible"
+                    },
+                    "stool": {
+                      "location": "centre stage",
+                      "visibility": "visible"
+                    }
+                  }
+                },
+                {
+                  "start_seconds": 6.5,
+                  "end_seconds": 9.75,
+                  "text": "Leaving {{board}} untouched, {{manager}} walks four measured steps downstage while the camera performs the single continuous lateral arc.",
+                  "state_updates": {
+                    "manager": {
+                      "location": "four steps downstage from {{stool}}",
+                      "pose": "standing after four steps"
+                    }
+                  }
+                }
+              ],
+              "dialogue": [
+                {
+                  "start_seconds": 5.6,
+                  "end_seconds": 8.1,
+                  "speaker": "manager",
+                  "language": "Chinese",
+                  "text": "主幕顺畅，工作灯也正常。"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

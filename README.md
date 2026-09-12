@@ -3,44 +3,68 @@
 **English** · [简体中文](README.zh-CN.md)
 
 X-MinimaxH3 is a local MiniMax H3 video-generation service optimized for a
-single NVIDIA SM89 GPU. It provides one bilingual Web console and REST API for
-FL2VA and Ref2VA generation, Base/LoRA hot switching, resource-constrained
-execution, checkpoint previews and native H3 second sampling.
+single NVIDIA SM89 GPU. Its bilingual Web console and REST API cover single
+video creation, long-video creation and task management, with FL2VA/Ref2VA,
+Base/LoRA execution, SelfLift progressive generation, retained-latent final
+sampling and automatic face repair.
 
 > Model weights, user uploads, latent states and generated videos are not
 > distributed in this repository.
 
 ## Features
 
-- One public control surface: total sampling steps and a continuous `0–100`
-  acceleration value.
+- A unified two-handle trajectory for first-pass/final steps and resolutions,
+  with independently tunable acceleration on both sampling segments.
 - Joint Base scheduler for actual DiT evaluations, forecast evaluations and
   per-step/per-layer attention budgets.
-- Six isolated launchers: FL2VA and Ref2VA on logical 24GB INT8, 16GB INT8 and
-  8GB W4A8 resource profiles.
-- Native generation from 360p through 1080p where admitted by the selected
-  profile, plus native H3 second sampling up to 1440p on INT8 profiles.
+- Four public model choices: W4A8 or INT8, each with FL2VA and Ref2VA. The
+  private 8GB/16GB/24GB VRAM executor is selected automatically.
+- Automatic resource routing and execution-plan compilation outside the DiT
+  hot loop.
+- SelfLift generation: run the first trajectory segment at a smaller canvas,
+  lift its clean latent with the H3 learned 3D upscaler, then finish at up to
+  1440p on admitted INT8 profiles.
+- Long-video online creation with low-resolution cumulative previews and a
+  retained clean final branch, plus JSON one-click creation without redundant
+  intermediate preview decoding. Every Ref2VA JSON window may define its own
+  complete Picture/Audio reference set; omitted sets inherit the previous
+  window, and server-local paths remain private.
+- Full-film final sampling over one continuous low-resolution latent timeline,
+  with optional 3–8 second temporal windows, overlap, audio-token authority,
+  adjustable final sigma scale and one final decode.
+- Automatic FL2VA face repair that ranks under-resolved face tracks, packs the
+  selected regions into a square atlas and runs four-step H3 Turbo repair.
 - Text-only, first-frame, last-frame and first+last-frame FL2VA generation.
 - Multi-reference Ref2VA with images, videos and independent audio references.
 - Larry Turbo and three task-aware LightX2V LoRA profiles.
-- Resumable checkpoints with fixed low-cost previews.
+- Configurable 1–4 step fork previews that do not modify the retained formal
+  sampling state.
 - Serial GPU queue, cancellation, task history and one-second hardware
   telemetry.
 - Optional ComfyUI HTTP connector that does not load a second H3 model.
 - English and Simplified Chinese console and documentation.
 
-## Product video
+## AI prompt-writing guides
+
+The [`ai-prompt-guides/`](ai-prompt-guides/) directory contains six standalone
+Chinese instruction files that can be uploaded to ChatGPT or another AI before
+describing a scene. They cover FL2VA and Ref2VA across single-video creation,
+online window-by-window long-video creation and one-click long-video JSON. Each
+file defines the required questions, H3 writing rules and exact paste-ready
+output format; use only the file matching the current task.
+
+## Video tutorial
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=Bao1nPI0JR8">
-    <img src="assets/tutorial/youtube-campaign-en-cover.jpg" width="860" alt="Watch the X-MinimaxH3 product video on YouTube">
+  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">
+    <img src="assets/tutorial/bilibili-quick-guide.jpg" width="860" alt="Make MiniMax H3 lightning fast — X-MinimaxH3 quick guide">
   </a>
 </p>
 
 <p align="center">
-  <strong>▶ X-MinimaxH3 — MiniMax H3 made local</strong><br>
-  <sub>English product overview · About 90 seconds</sub><br>
-  <a href="https://www.youtube.com/watch?v=Bao1nPI0JR8">Watch on YouTube</a>
+  <strong>▶ Make MiniMax H3 lightning fast</strong><br>
+  <sub>Quick deployment and usage guide · About 20 minutes · BV1Fn8q6JEhX · Chinese narration</sub><br>
+  <a href="https://www.bilibili.com/video/BV1Fn8q6JEhX/">Watch the complete tutorial on Bilibili</a>
 </p>
 
 ## Measured effect comparison
@@ -51,18 +75,20 @@ footage for 5-, 10- and 15-second examples. Measurements were recorded on a
 14th Gen Intel Core i9, 128GB RAM and an RTX 4090 24GB using INT8 FL2VA.
 
 <p align="center">
-  <a href="https://youtu.be/43gOGaAlwnk">
-    <img src="assets/demos/effect-comparison-en-cover.jpg" width="860" alt="Watch the X-MinimaxH3 English effect comparison on YouTube">
-  </a><br>
-  <strong>▶ Watch the English comparison video on YouTube</strong>
+  <video controls muted loop playsinline width="860" src="assets/demos/effect-comparison-en.mp4">
+    Your browser does not support embedded video.
+  </video>
+</p>
+
+<p align="center">
+  <a href="assets/demos/effect-comparison-en.mp4">▶ Watch or download the English comparison video</a>
 </p>
 
 ## Community and feedback
 
 Use [GitHub Discussions](https://github.com/PullMyBoots/X-MinimaxH3/discussions)
-for international installation help, hardware compatibility reports,
-benchmarks, ComfyUI/API questions and generated-video showcases. For real-time
-community chat, join the public
+for installation help, hardware compatibility reports, benchmarks, API questions
+and generated-video showcases. For real-time chat, join the public
 [Telegram group](https://t.me/XMinimaxH3Community). You can also contact the
 author directly on WeChat; please include `X-MinimaxH3` in your friend request.
 
@@ -71,7 +97,7 @@ author directly on WeChat; please include `X-MinimaxH3` in your friend request.
 | <a href="https://t.me/XMinimaxH3Community"><img src="assets/community/telegram-community.png" width="260" alt="X-MinimaxH3 Telegram community QR code"></a> | <img src="assets/community/wechat-contact.jpg" width="260" alt="Author WeChat QR code"> | <img src="assets/community/wechat-group.jpg" width="260" alt="X-MinimaxH3 WeChat group QR code"> |
 | [Open the public group](https://t.me/XMinimaxH3Community) | Add `X-MinimaxH3` to the request | An updated QR code will be posted here after the current one expires |
 
-For reproducible bugs, please use
+For reproducible bugs and feature requests, please use
 [GitHub Issues](https://github.com/PullMyBoots/X-MinimaxH3/issues) so that the
 discussion and resolution remain searchable.
 
@@ -85,7 +111,7 @@ discussion and resolution remain searchable.
 | PyTorch | 2.13.0+cu130 |
 | PyTorch CUDA runtime | 13.0 |
 | Service build toolkit | CUDA 13.3 |
-| Host memory | 64GB effective minimum recommended; more for long/high-resolution jobs |
+| Host memory | 64GB or more recommended; runtime residency is selected automatically |
 
 Other GPU architectures have not been release-validated. The logical 8GB and
 16GB routes were tested with hard allocator limits on SM89; a physical card of
@@ -100,6 +126,7 @@ weights declared by `models/manifest.json`:
 
 ```bash
 git clone https://github.com/PullMyBoots/X-MinimaxH3.git
+cd X-MinimaxH3
 ./setup.sh --download-models --accept-model-license
 ./run.sh
 ```
@@ -143,33 +170,46 @@ suite with:
 ./test.sh
 ```
 
-The release validation recorded:
+The current source, Web UI, API contracts, long-video/SelfLift path, face
+repair path, packaging boundary and ComfyUI connector are covered by the
+release regression suite. Exact counts and the clean-archive verification are
+recorded in [VALIDATION.md](VALIDATION.md). Model hashes and the earlier real
+RTX 4090 generation matrix remain recorded as historical hardware evidence.
 
-- 709 release tests passed, 4 skipped and 0 failed; all 24 ComfyUI connector
-  tests also passed;
-- exact size and SHA-256 checks passed for all 12 declared model artifacts;
-- all six launchers and the SM89 INT8/W4A8 kernel smoke test passed;
-- real MP4 generation passed for Base FL2VA, LightX2V FL2VA 4-step and 8-step,
-  and LightX2V Ref2VA 4-step.
+## Automatic resource execution
 
-See [VALIDATION.md](VALIDATION.md) for commands, timings and output hashes.
+The console exposes only four choices: `W4A8 · FL2VA`, `W4A8 · Ref2VA`,
+`INT8 · FL2VA` and `INT8 · Ref2VA`. It detects the GPU before loading weights:
 
-## Resource profiles
+| Detected VRAM | Private execution route | Available weights | Native first generation | Native H3 second sampling |
+|---|---|---|---|---|
+| 8–15GB | 8GB | W4A8 | native windows up to 720p × 15s; transparent long-horizon requests | up to 1080p |
+| 16–23GB | 16GB | W4A8 or INT8 | experimental native windows up to 1080p for both weight tiers; transparent long-horizon requests | W4A8 up to 1080p; INT8 up to 1440p |
+| 24GB+ | 24GB | W4A8 or INT8 | native windows up to 1080p for both weight tiers; transparent long-horizon requests | W4A8 up to 1080p; INT8 up to 1440p |
 
-| Profile | Weights | Native first generation | Native H3 second sampling |
-|---|---|---|---|
-| 24GB | INT8 | up to 1080p × 15s | up to 1440p |
-| 16GB | INT8 | experimental up to 1080p × 15s | up to 1440p |
-| 8GB | W4A8 | up to 720p × 15s | up to 1080p |
+The Web console, REST API and generation nodes accept 1–300 seconds. Requests
+above the physical native-window limit are planned automatically with a clean
+39-frame joint A/V prefix and one final decode. The current real-video release
+gate covers 480p × 30s, Base 20 steps, acceleration 75; higher resolutions and
+longer durations should be validated on the target deployment. See the
+[mechanism and acceptance evidence](docs/TRANSPARENT_LONG_HORIZON_2026_09_01.md).
+
+The runtime manages H3, Qwen, VAE and subprocess residency internally. It
+compiles the selected resource plan at model load and keeps per-step routing
+out of the DiT hot path.
+
+The September 1 resource gate completed 23/23 short end-to-end rows: every
+FL2VA resolution in the 8/16/24GB matrix plus one real Ref2VA image-conditioned
+boundary row per backend. See [VALIDATION.md](VALIDATION.md).
 
 Out-of-envelope jobs are rejected instead of silently switching to another
 backend. Resolution, duration and media limits exposed by the active service
 are authoritative.
 
-The Settings page exposes a 68–362 frame temporal-context control for native
-H3 second sampling. Shorter windows usually reduce per-window DiT latency;
-longer windows preserve more motion and identity context. H3 phase alignment,
-17-frame overlap, latent crossfade and VRAM-safe shortening remain automatic.
+The Settings page can enable 3–8 second temporal windows for final sampling.
+Shorter windows reduce per-window latency and peak memory; longer windows keep
+more motion context. Phase alignment, overlap, latent blending, audio-token
+authority and VRAM-safe shortening remain automatic.
 
 ## LoRA profiles
 
@@ -189,7 +229,8 @@ configured model store's `loras/` directory.
 See the [English ComfyUI guide](integrations/comfyui/README.en.md) or the
 [Chinese ComfyUI guide](integrations/comfyui/README.md).
 
-Start X-MinimaxH3 first, select a launcher in its console, and then run:
+Start X-MinimaxH3 first, select one of the four model choices in its console,
+and then run:
 
 ```bash
 ./integrations/comfyui/start_comfyui.sh
@@ -206,6 +247,7 @@ HTTP service and does not allocate another copy of H3 inside ComfyUI.
 h3serve/                 Web/API, queue, scheduler and native H3 runtime
 backends/                SM89 kernels and audited narrow binary runtime
 static/                  bilingual Web console
+ai-prompt-guides/        six AI-facing prompt-writing and output contracts
 integrations/comfyui/    optional connector and example workflows
 models/manifest.json     weight provenance, sizes and SHA-256 contract
 scripts/                 setup, launch, validation and research utilities
@@ -220,6 +262,9 @@ docs/                    user, deployment and architecture documentation
 - [中文用户指南](docs/USER_GUIDE.zh-CN.md)
 - [中文部署指南](docs/DEPLOYMENT.zh-CN.md)
 - [Native engine architecture](docs/NATIVE_ENGINE_ARCHITECTURE.md)
+- [SelfLift progressive generation](docs/SELFLIFT_PROGRESSIVE_GENERATION.md)
+- [Long-video creation studio v3](docs/INFINITE_CREATION_STUDIO_V3.md)
+- [Automatic VRAM routing and hard host-RAM budget](docs/AUTOMATIC_RESOURCE_BUDGET_2026_08_31.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Release validation](VALIDATION.md)
 
@@ -243,10 +288,20 @@ particular, we thank:
 - [Comfyui Minimax H3 Latent Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
   for the learned 3D latent-upscaling architecture and released H3 latent
   upscaler weights used to initialize second sampling.
+- [comfyui-SelfLift](https://github.com/facok/comfyui-SelfLift) for the
+  progressive clean-endpoint lifting mechanism that informed our native H3
+  two-resolution trajectory. No upstream runtime source is embedded.
 - [SageAttention](https://github.com/thu-ml/SageAttention) for the quantized
   dense-attention kernels and implementation foundation used by our SM89
   dense Attention path. X-MinimaxH3 adds H3-specific layout, quantization,
   long-sequence stability and scheduler integration around that foundation.
+- [ComfyUI-H3-Continuum](https://github.com/ukr8b3g-cmyk/ComfyUI-H3-Continuum)
+  for publishing and validating the masked joint audio/video prefix mechanism
+  that informed our native transparent long-horizon executor.
+- [ComfyUI-MiniMax-H3-LongMedia](https://github.com/vizart-vj/ComfyUI-MiniMax-H3-LongMedia)
+  for its long-media systems work. X-MinimaxH3 independently adapted the
+  compatible principles of one model lifecycle, deferred decode and localized
+  prompt timelines without embedding its ComfyUI monkey-patch runtime.
 
 The upstream projects are not affiliated with or responsible for
 X-MinimaxH3. Their original licenses and notices remain in force; see

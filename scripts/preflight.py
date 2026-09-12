@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only release preflight for all six SM89 H3 launchers."""
+"""Read-only release preflight for every private SM89 H3 executor."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from h3serve.config import ServicePaths  # noqa: E402
+from h3serve.deployment_profiles import LAUNCHER_DEFINITIONS  # noqa: E402
 from h3serve.memory_policy import (  # noqa: E402
     detect_host_memory,
     resolve_host_memory_profile,
@@ -25,6 +26,7 @@ from h3serve.native_engine.session_factory import (  # noqa: E402
     NativeSessionPaths,
 )
 from h3serve.native_engine.sm89_policy import configure_sm89_runtime  # noqa: E402
+from h3serve.upscaler import FlashVSRUpscaler  # noqa: E402
 
 
 PINNED_MINIMAX = "8d8824efaf94586c0cc9ac7ad8d0723d4d6420ea"
@@ -108,16 +110,10 @@ def main() -> None:
     )
     runtimes = {
         launcher: factory.preflight(launcher)
-        for launcher in (
-            "fl2va_int8_24gb",
-            "ref2va_int8_24gb",
-            "fl2va_int8_16gb",
-            "ref2va_int8_16gb",
-            "fl2va_w4a8_8gb",
-            "ref2va_w4a8_8gb",
-        )
+        for launcher in LAUNCHER_DEFINITIONS
     }
     models = model_status(paths.model_dir)
+    temporal_second_sampling = FlashVSRUpscaler(paths).status()
     manifest = json.loads(
         (ROOT / "models/manifest.json").read_text(encoding="utf-8")
     )
@@ -152,8 +148,15 @@ def main() -> None:
         "native_runtimes": runtimes,
         "sm89_kernel_runtime": kernel,
         "second_sampling": {
-            "ready": True,
-            "implementation": "native_h3_clean_av_latent_refinement",
+            "default_method": "temporal",
+            "ready": bool(temporal_second_sampling["ready"]),
+            "methods": {
+                "temporal": temporal_second_sampling,
+                "h3": {
+                    "ready": True,
+                    "implementation": "native_h3_clean_av_latent_refinement",
+                },
+            },
         },
         "end_to_end_runtime_ready": bool(
             models["ready"]

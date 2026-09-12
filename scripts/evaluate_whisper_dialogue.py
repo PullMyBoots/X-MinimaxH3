@@ -4,11 +4,17 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import importlib.metadata
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+
+_UCONV = shutil.which("uconv")
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,10 +50,27 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+@lru_cache(maxsize=1024)
+def _normalize_han_variants(value: str) -> str:
+    """Fold Traditional Chinese ASR spelling without a sample-specific map."""
+
+    if _UCONV is None:
+        return value
+    completed = subprocess.run(
+        [_UCONV, "-x", "Traditional-Simplified"],
+        input=value,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    return completed.stdout
+
+
 def normalize_text(value: str) -> str:
     return "".join(
         character.lower()
-        for character in value
+        for character in _normalize_han_variants(value)
         if re.match(r"[\w\u3400-\u9fff]", character, re.UNICODE)
     )
 
@@ -72,7 +95,7 @@ def expected_dialogue(document: dict) -> list[dict]:
     values = document.get("expected_dialogue")
     if values is None and isinstance(document.get("task"), dict):
         values = document["task"].get("expected_dialogue")
-    if not isinstance(values, list) or not values:
+    if not isinstance(values, list):
         raise ValueError("contract must contain expected_dialogue")
     return values
 
@@ -136,6 +159,10 @@ def evaluate_segments(segments: list[dict], expected: list[dict]) -> dict:
         "expected_all_normalized": expected_all,
         "global_character_error_rate": edit_distance(expected_all, observed_all)
         / max(1, len(expected_all)),
+        "unexpected_transcript_character_count": (
+            len(observed_all) if not expected_all else 0
+        ),
+        "unexpected_speech_detected": bool(observed_all and not expected_all),
     }
 
 
@@ -164,6 +191,9 @@ def main() -> int:
         device=args.device,
         model_name=args.align_model,
     )
+    stem_counts: dict[str, int] = {}
+    for video in args.videos:
+        stem_counts[video.stem] = stem_counts.get(video.stem, 0) + 1
     for video in args.videos:
         audio = whisperx.load_audio(str(video))
         transcription = model.transcribe(
@@ -225,6 +255,11 @@ def main() -> int:
             "batch_size": args.batch_size,
             "vad_method": args.vad_method,
             "alignment_model": args.align_model or "WhisperX default for zh",
+            "text_normalization": (
+                "unicode_word_lower_plus_icu_hant_to_hans"
+                if _UCONV is not None
+                else "unicode_word_lower_exact"
+            ),
             "condition_on_previous_text": False,
             "whisperx_version": importlib.metadata.version("whisperx"),
             "whisperx_path": str(Path(whisperx.__file__).resolve()),
@@ -232,7 +267,12 @@ def main() -> int:
             "segments": segments,
             "evaluation": evaluate_segments(segments, expected),
         }
-        output = args.output_dir / f"{video.stem}_whisper.json"
+        output_stem = (
+            video.stem
+            if stem_counts[video.stem] == 1
+            else f"{video.parent.parent.name}__{video.stem}"
+        )
+        output = args.output_dir / f"{output_stem}_whisper.json"
         output.write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
         )

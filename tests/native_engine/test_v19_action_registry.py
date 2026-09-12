@@ -289,6 +289,9 @@ class V19HumanEvidenceTests(unittest.TestCase):
             __import__("pathlib").Path(__file__).resolve().parents[2]
             / "h3serve/native_engine/planner/evidence/human_reviews_v19_seed.json"
         )
+        # Public source packages intentionally omit generated MP4s.  The
+        # checked-in evidence surface carries their immutable SHA-256 values,
+        # so semantic attribution remains verifiable without bundling media.
         evidence = load_v19_human_evidence(source, require_artifacts=False)
         shared = next(
             row for row in evidence.records if row.evidence_id == "H19-SHARED-219-220"

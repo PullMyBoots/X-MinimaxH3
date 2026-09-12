@@ -46,13 +46,17 @@ def refinement_sigma_schedule(
     num_steps: int,
     denoise: float,
     shift: float,
+    *,
+    curve_power: float = 1.0,
 ) -> tuple[float, ...]:
     """Build a step-invariant low-noise Simple schedule.
 
     ``denoise`` owns the start point and ``num_steps`` owns only the numerical
     resolution between that point and zero.  This is the continuous form of
     ComfyUI's ``steps / denoise`` tail selection without its low-step integer
-    quantisation (most visible at denoise=0.30).
+    quantisation (most visible at denoise=0.30).  ``curve_power`` leaves the
+    endpoints and evaluation count unchanged; values above one move the
+    intermediate evaluations toward the low-noise terminal region.
     """
 
     if isinstance(num_steps, bool) or not isinstance(num_steps, int) or num_steps <= 0:
@@ -61,17 +65,47 @@ def refinement_sigma_schedule(
         raise ValueError("denoise must lie inside (0, 1]")
     if shift <= 0.0:
         raise ValueError("sigma shift must be positive")
+    if not 0.5 <= float(curve_power) <= 3.0:
+        raise ValueError("refinement sigma curve power must lie inside [0.5, 3]")
 
     def shifted(base: float) -> float:
         return shift * base / (1.0 + (shift - 1.0) * base)
 
     values = tuple(
-        shifted(float(denoise) * (num_steps - index) / num_steps)
+        shifted(
+            float(denoise)
+            * (((num_steps - index) / num_steps) ** float(curve_power))
+        )
         for index in range(num_steps)
     ) + (0.0,)
     if any(left <= right for left, right in zip(values, values[1:])):
         raise RuntimeError("refinement sigma schedule must be strictly decreasing")
     return values
+
+
+def comfy_denoise_tail_sigma_schedule(
+    num_steps: int,
+    denoise: float,
+    shift: float,
+) -> tuple[float, ...]:
+    """Return ComfyUI BasicScheduler's exact truncated ``simple`` schedule.
+
+    BasicScheduler treats ``num_steps`` as the number of evaluations retained
+    after truncation.  It first builds ``int(num_steps / denoise)`` simple
+    steps, then keeps the final ``num_steps + 1`` sigma values.  FaceRefine's
+    published four-step workflow relies on this discrete behaviour; the
+    service's continuous refinement schedule is intentionally still available
+    for ordinary H3 second sampling.
+    """
+
+    if isinstance(num_steps, bool) or not isinstance(num_steps, int) or num_steps <= 0:
+        raise ValueError("num_steps must be a positive integer")
+    if not 0.0 < float(denoise) <= 1.0:
+        raise ValueError("denoise must lie inside (0, 1]")
+    total_steps = int(num_steps / float(denoise))
+    if total_steps < num_steps:
+        total_steps = num_steps
+    return simple_sigma_schedule(total_steps, shift)[-(num_steps + 1) :]
 
 
 @dataclass(frozen=True, slots=True)

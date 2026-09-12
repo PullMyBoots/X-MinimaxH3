@@ -517,6 +517,68 @@ class LongSequenceStabilityTests(unittest.TestCase):
             constrained_memory["shared_qkv_quantization_fits_budget"]
         )
 
+    def test_24gb_release_reuses_qkv_quantization_only_for_ref2va(self) -> None:
+        request = HotSessionRequest(
+            prompt="four-image resource admission is content independent",
+            seed=1,
+            width=1920,
+            height=1088,
+            frames=362,
+            fps=24,
+            steps=5,
+            output_path=Path("unused.mp4"),
+            actual_step_indices=(0, 1, 4),
+            execution_plan=ExecutionPlan(
+                offload_mode=OffloadMode.BLOCK,
+                mlp_chunk_tokens=4096,
+            ),
+            release_byte_exact_optimizations=True,
+            reference_images=tuple(
+                Path(f"reference-{index}.png") for index in range(4)
+            ),
+            prepared_reference_images=tuple(
+                SimpleNamespace(width=1280, height=720) for _ in range(4)
+            ),
+        )
+        for engine, expected in (("reference", True), ("original", False)):
+            with self.subTest(engine=engine):
+                session = NativeT2AVHotSession.__new__(
+                    NativeT2AVHotSession
+                )
+                session.engine = engine
+                session.planner = None
+                session.runtime_config = SimpleNamespace(
+                    device="cpu",
+                    max_device_bytes=int(23.25 * 1024**3),
+                    resource_profile="int8_24gb",
+                    weight_tier="int8",
+                )
+                plan, profile = session._resolve_execution_plan(
+                    request,
+                    text_tokens=1200,
+                )
+                assert plan is not None
+                memory = profile["memory_execution"]
+                self.assertEqual(
+                    plan.long_sequence_shared_qkv_quantization,
+                    expected,
+                )
+                self.assertEqual(
+                    memory["release_shared_qkv_quantization"],
+                    expected,
+                )
+                self.assertTrue(
+                    memory["shared_qkv_quantization_fits_budget"]
+                )
+                if expected:
+                    self.assertEqual(
+                        memory[
+                            "release_shared_qkv_quantization_evidence"
+                        ],
+                        "h3_shared_qkv_int8_activation_exact_ref2va_"
+                        "24gb_1080p15_four_image_20260831",
+                    )
+
     def test_v24_medium_anchor_enables_only_its_byte_exact_helpers(self) -> None:
         session = NativeT2AVHotSession.__new__(NativeT2AVHotSession)
         session.engine = "original"

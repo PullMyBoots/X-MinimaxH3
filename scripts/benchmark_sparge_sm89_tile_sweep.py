@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         default=Path(
             os.environ.get(
                 "H3_NATIVE_SPARGE_SOURCE",
-                "/root/x-minimaxh3-runtime/vendor/SpargeAttn",
+                "/root/h3-new-serve-runtime/vendor/SpargeAttn",
             )
         ),
     )
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "--build-dir",
         type=Path,
         default=Path(
-            "/root/x-minimaxh3-runtime/extensions/"
+            "/root/h3-new-serve-runtime/extensions/"
             "sparge-sm89-tile-sweep-torch213-cu133"
         ),
     )

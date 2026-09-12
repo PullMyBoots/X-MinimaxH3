@@ -17,12 +17,10 @@ from PIL import Image
 
 from h3serve.app import (
     JobRecord, JobService, create_app,
-    _load_persisted_mimo_key, _mimo_key_path,
 )
 from h3serve.backend import CheckpointResult, GenerationResult, JobCancelled
 from h3serve.config import ServicePaths
-from h3serve.contract import GenerationSpec, SecondSamplingSpec
-from h3serve.prompt_enhancer import EnhancementRequest
+from h3serve.contract import GenerationSpec, SecondSamplingSpec, VideoRepairSpec
 from h3serve.memory_policy import HOST_MEMORY_PROFILES
 
 
@@ -84,6 +82,12 @@ class FakeBackend:
             if spec.checkpoint_preview:
                 preview_path = self.video_path.with_name("checkpoint-preview.mp4")
                 preview_path.write_bytes(b"checkpoint-preview")
+            preview_latents_path = None
+            if spec.selflift_enabled:
+                preview_latents_path = checkpoint_path.with_name(
+                    checkpoint_path.stem + ".preview.pt"
+                )
+                preview_latents_path.write_bytes(b"selflift-low-resolution-preview")
             return CheckpointResult(
                 runtime_key=self.key,
                 elapsed_seconds=0.5,
@@ -91,6 +95,7 @@ class FakeBackend:
                 preview_path=preview_path,
                 completed_steps=int(spec.checkpoint_step),
                 total_steps=20 if spec.model_variant == "base" else int(spec.preset["steps"]),
+                preview_latents_path=preview_latents_path,
             )
         preview_ready = preview_callbacks.get("preview_ready_callback")
         if preview_ready is not None:
@@ -137,6 +142,137 @@ class FakeBackend:
             final_latents_path=latent_path,
         )
 
+    async def video_repair(
+        self, spec, video_repair: VideoRepairSpec, source_video_path,
+        job_id, cancel_event, progress_callback=None,
+    ) -> GenerationResult:
+        if cancel_event.is_set():
+            raise JobCancelled("cancelled")
+        self.last_spec = spec
+        self.last_video_repair = video_repair
+        self.last_video_repair_source = Path(source_video_path)
+        output = self.video_path.with_name(f"{job_id}.mp4")
+        output.write_bytes(b"video-repaired")
+        if progress_callback:
+            progress_callback({
+                "percent": 78,
+                "stage": "video_repair_h3",
+                "detail": "1/1",
+            })
+        return GenerationResult(
+            runtime_key="original:native-sm89",
+            elapsed_seconds=1.75,
+            output_path=output,
+            inference_plan={
+                "video_repair": {
+                    **video_repair.to_dict(),
+                    "implementation": "tracked_face_atlas_h3_turbo_v3",
+                },
+            },
+        )
+
+    async def continue_generate(
+        self, spec, continuation, source_latents_path, source_memory_path,
+        job_id, reference_images, reference_audios, cancel_event,
+        progress_callback=None, **preview_callbacks,
+    ) -> GenerationResult:
+        if cancel_event.is_set():
+            raise JobCancelled("cancelled")
+        self.last_spec = spec
+        self.last_continuation = continuation
+        self.last_continuation_source = Path(source_latents_path)
+        self.reference_images = reference_images
+        self.reference_audios = reference_audios
+        output = self.video_path.with_name(f"{job_id}.mp4")
+        checkpoint_path = preview_callbacks.get("checkpoint_path")
+        resume_checkpoint_path = preview_callbacks.get("resume_checkpoint_path")
+        self.last_continuation_resume_checkpoint = (
+            Path(resume_checkpoint_path) if resume_checkpoint_path else None
+        )
+        if checkpoint_path is not None:
+            checkpoint_path = Path(checkpoint_path)
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_path.write_bytes(b"infinite-formal-checkpoint")
+            preview_path = None
+            if spec.checkpoint_preview:
+                preview_path = output.with_name(f"{job_id}.checkpoint-preview.mp4")
+                preview_path.write_bytes(b"infinite-checkpoint-preview")
+            preview_latents_path = None
+            if spec.selflift_enabled:
+                preview_latents_path = output.with_name(
+                    f"{job_id}.checkpoint-preview.pt"
+                )
+                preview_latents_path.write_bytes(
+                    b"cumulative-selflift-low-resolution-preview"
+                )
+            return CheckpointResult(
+                runtime_key="original:native-sm89",
+                elapsed_seconds=0.75,
+                checkpoint_path=checkpoint_path,
+                preview_path=preview_path,
+                completed_steps=int(spec.checkpoint_step),
+                total_steps=int(spec.sampling_steps),
+                preview_latents_path=preview_latents_path,
+            )
+        output.write_bytes(b"cumulative-infinite-video")
+        latent_path = output.with_suffix(".pt")
+        latent_path.write_bytes(b"cumulative-clean-av-latent")
+        memory_path = output.with_suffix(".memory.pt")
+        if continuation.memory > 0:
+            memory_path.write_bytes(b"bounded-av-memory")
+        if progress_callback:
+            progress_callback({
+                "percent": 75, "stage": "infinite_continuation_window",
+                "detail": "strict continuation",
+            })
+        preview_ready = preview_callbacks.get("preview_ready_callback")
+        if preview_ready is not None:
+            preview_path = output.with_name(f"{job_id}.preview.mp4")
+            preview_path.write_bytes(b"infinite-tail-intermediate-preview")
+            preview_ready({"output_path": str(preview_path)})
+        return GenerationResult(
+            runtime_key="original:native-sm89",
+            elapsed_seconds=2.0,
+            output_path=output,
+            inference_plan={
+                "infinite_continuation": {
+                    "physical_boundary": "strict_continuation",
+                },
+            },
+            final_latents_path=latent_path,
+            token_memory_path=memory_path if memory_path.is_file() else None,
+        )
+
+    async def complete_infinite_selflift(
+        self, sources, job_id, cancel_event, progress_callback=None, final_spec=None,
+    ) -> GenerationResult:
+        if cancel_event.is_set():
+            raise JobCancelled("cancelled")
+        self.last_infinite_selflift_sources = tuple(sources)
+        self.last_infinite_selflift_final_spec = final_spec
+        output = self.video_path.with_name(f"{job_id}.mp4")
+        output.write_bytes(b"selflift-final-film")
+        latent_path = output.with_suffix(".pt")
+        latent_path.write_bytes(b"selflift-final-clean-av-latent")
+        if progress_callback:
+            progress_callback({
+                "percent": 90,
+                "stage": "infinite_selflift_assemble",
+                "detail": "fake SelfLift final",
+            })
+        return GenerationResult(
+            runtime_key="original:native-sm89",
+            elapsed_seconds=2.25,
+            output_path=output,
+            final_latents_path=latent_path,
+            inference_plan={
+                "infinite_selflift": {
+                    "schema_version": "global_sliding_selflift_v1",
+                    "window_count": len(sources),
+                },
+            },
+        )
+
     async def stop(self) -> None:
         self.key = None
         self.preloaded = None
@@ -144,29 +280,6 @@ class FakeBackend:
 
     def preflight(self, _engine: str) -> dict:
         return {"ready": True, "checks": {"fake": True}}
-
-
-class FakePromptEnhancer:
-    def __init__(self) -> None:
-        self.api_key: str | None = None
-        self.request: EnhancementRequest | None = None
-        self.images = ()
-        self.videos = ()
-        self.audios = ()
-
-    async def enhance(self, *, api_key, request, images=(), videos=(), audios=()):
-        self.api_key = api_key
-        self.request = request
-        self.images = images
-        self.videos = videos
-        self.audios = audios
-        return {
-            "shots": list(request.shots),
-            "soundtrack": {
-                "overall_soundscape": "海风与自行车链条声",
-                "non_diegetic_music": "N/A",
-            },
-        }
 
 
 class FakeUpscaler:
@@ -178,7 +291,7 @@ class FakeUpscaler:
 
     async def upscale(
         self, source, *, target_width, target_height, cancel_event,
-        progress_callback=None,
+        progress_callback=None, output_path=None,
     ):
         from h3serve.upscaler import UpscaleResult
 
@@ -186,10 +299,12 @@ class FakeUpscaler:
             progress_callback({
                 "percent": 50, "stage": "upscaling", "detail": "fake upscale"
             })
-        output = source.with_name("upscaled.mp4")
+        output = Path(output_path) if output_path is not None else source.with_name("upscaled.mp4")
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(source.read_bytes() + b"-upscaled")
         return UpscaleResult(
-            output, 2.5, target_width, target_height, 9000.0, 9800.0
+            output, 2.5, target_width, target_height, 9000.0, 9800.0,
+            {"inference": 1.5, "encode": 0.5},
         )
 
     async def stop(self):
@@ -203,18 +318,37 @@ class ApiTest(AioHTTPTestCase):
         self.video.write_bytes(b"test-video")
         serve_dir = Path(__file__).resolve().parents[1]
         paths = ServicePaths.defaults(self.temporary, data_dir=self.temporary / "data")
-        self.prompt_enhancer = FakePromptEnhancer()
         return create_app(
             paths=paths,
             serve_dir=serve_dir,
             api_key="secret",
             backend=FakeBackend(self.video),
-            prompt_enhancer=self.prompt_enhancer,
         )
 
     async def asyncTearDown(self) -> None:
         await super().asyncTearDown()
         shutil.rmtree(self.temporary, ignore_errors=True)
+
+    async def test_long_video_preview_compiles_without_queuing(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        example_path = (
+            Path(__file__).resolve().parents[1]
+            / "static" / "long-video-examples" / "cafe30.json"
+        )
+        payload = json.loads(example_path.read_text(encoding="utf-8"))
+        response = await self.client.post(
+            "/api/v1/long-video/preview", headers=headers, json=payload,
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        preview = await response.json()
+        self.assertEqual(len(preview["windows"]), 3)
+        self.assertEqual(
+            [item["transition"] for item in preview["windows"]],
+            ["opening", "cut", "cut"],
+        )
+        self.assertEqual(preview["memory_budget"]["video_frames"], 6)
+        self.assertEqual(preview["memory_budget"]["audio_ticks_per_clip"], 79)
+        self.assertEqual(self.app["job_service"].jobs, {})
 
     async def test_auth_contract_queue_and_video(self) -> None:
         response = await self.client.get("/api/v1/options")
@@ -230,8 +364,21 @@ class ApiTest(AioHTTPTestCase):
         self.assertEqual(options["defaults"]["quality"], "balanced")
         self.assertIn("1080p", options["resolutions"])
         self.assertNotIn("2k", options["resolutions"])
+        self.assertIn("1440p", options["progressive_resolutions"])
+        self.assertEqual(options["progressive_resolution"]["max"], 1440)
+        self.assertEqual(options["progressive_resolution"]["first_pass_max"], 1080)
         self.assertIn(
             "1440p", options["advanced_limits"]["second_sampling"]["levels"]
+        )
+        self.assertEqual(
+            options["advanced_limits"]["second_sampling"]["default_method"],
+            "h3",
+        )
+        self.assertFalse(
+            options["advanced_limits"]["second_sampling"]["methods"]["temporal"]["available"]
+        )
+        self.assertTrue(
+            options["advanced_limits"]["second_sampling"]["methods"]["h3"]["available"]
         )
         self.assertEqual(options["duration"]["max_by_resolution"]["1080p"], 15)
         self.assertEqual(options["duration"]["max_by_preset"]["1080p"]["4:3"], 15.0)
@@ -438,6 +585,995 @@ class ApiTest(AioHTTPTestCase):
         )
         self.assertEqual(await video.read(), b"h3-second-sampled-video")
 
+        response = await self.client.post(
+            f"/api/v1/jobs/{source_id}/second-sampling",
+            headers=headers,
+            json={
+                "resolution": "1080p", "steps": 4,
+                "model_variant": "lora", "acceleration": 75,
+                "strength": "standard",
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        lora_child_id = (await response.json())["id"]
+        for _ in range(80):
+            lora_child = await (
+                await self.client.get(
+                    f"/api/v1/jobs/{lora_child_id}", headers=headers
+                )
+            ).json()
+            if lora_child["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(lora_child["status"], "succeeded")
+        self.assertEqual(lora_child["request"]["model_variant"], "lora")
+        self.assertEqual(lora_child["request"]["engine"], "lora")
+        self.assertEqual(lora_child["second_sampling"]["model_variant"], "lora")
+        self.assertEqual(lora_child["second_sampling"]["steps"], 4)
+
+    async def test_completed_card_can_queue_pixel_video_repair(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        settings_response = await self.client.put(
+            "/api/v1/settings/face-repair", headers=headers,
+            json={"canvas_size": 1088, "capacity": 16},
+        )
+        self.assertEqual(settings_response.status, 200)
+        settings = await settings_response.json()
+        self.assertEqual(settings["steps"], 4)
+        self.assertEqual(settings["canvas_size"], 1088)
+        self.assertEqual(settings["capacity"], 16)
+        persisted_settings = json.loads(
+            (self.temporary / "data/settings/face_repair.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            persisted_settings, {"canvas_size": 1088, "capacity": 16}
+        )
+        response = await self.client.post(
+            "/api/v1/generations", headers=headers, json={
+                "prompt": "Several distant faces in a station.",
+                "resolution": "480p",
+                "aspect_ratio": "16:9",
+                "duration_seconds": 5,
+                "model_variant": "lora",
+            },
+        )
+        source_id = (await response.json())["id"]
+        for _ in range(80):
+            source = await (
+                await self.client.get(
+                    f"/api/v1/jobs/{source_id}", headers=headers
+                )
+            ).json()
+            if source["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(source["status"], "succeeded")
+        self.assertTrue(source["video_repair_available"])
+
+        response = await self.client.post(
+            f"/api/v1/jobs/{source_id}/video-repair",
+            headers=headers,
+            json={
+                "acceleration": 72,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        queued = await response.json()
+        self.assertEqual(queued["video_repair"]["source_job_id"], source_id)
+        self.assertEqual(queued["video_repair"]["max_faces"], 16)
+        self.assertEqual(
+            queued["video_repair"]["layout_policy"],
+            "fixed_square_cells",
+        )
+        self.assertEqual(queued["video_repair"]["canvas_size"], 1088)
+        self.assertEqual(queued["video_repair"]["steps"], 4)
+        self.assertEqual(queued["video_repair"]["acceleration"], 72)
+        self.assertEqual(queued["video_repair"]["minimum_window_seconds"], 4.0)
+        self.assertEqual(queued["video_repair"]["window_seconds"], 6.0)
+        self.assertEqual(
+            queued["video_repair"]["window_policy"],
+            "automatic_canvas_tier",
+        )
+        self.assertEqual(queued["request"]["model_variant"], "lora")
+
+        child_id = queued["id"]
+        for _ in range(80):
+            child = await (
+                await self.client.get(
+                    f"/api/v1/jobs/{child_id}", headers=headers
+                )
+            ).json()
+            if child["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(child["status"], "succeeded", child.get("error"))
+        self.assertEqual(child["progress"]["detail"], "人脸修复完成")
+        self.assertEqual(
+            child["inference_plan"]["video_repair"]["implementation"],
+            "tracked_face_atlas_h3_turbo_v3",
+        )
+        backend = self.app["job_service"].backend
+        self.assertEqual(backend.last_video_repair.mode, "face")
+        self.assertEqual(backend.last_video_repair_source, self.video)
+        persisted = json.loads(
+            (self.temporary / "data" / "jobs" / f"{child_id}.json").read_text()
+        )
+        # Completed jobs normalize pending_action back to "generate" because
+        # there is no queued operation left.  The durable task identity and
+        # parameters live in the immutable video_repair contract.
+        self.assertEqual(persisted["_internal"]["pending_action"], "generate")
+        self.assertEqual(persisted["_internal"]["source_job_id"], source_id)
+        self.assertEqual(persisted["_internal"]["video_repair"]["max_faces"], 16)
+        video = await self.client.get(
+            f"/api/v1/jobs/{child_id}/video", headers=headers
+        )
+        self.assertEqual(await video.read(), b"video-repaired")
+
+    async def test_reference_card_does_not_offer_or_accept_face_repair(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        service = self.app["job_service"]
+        source = JobRecord(
+            id="reference-face-repair-source",
+            spec=GenerationSpec.from_mapping({
+                "prompt": "A reference-conditioned portrait video.",
+                "runtime_launcher": "ref2va_int8_24gb",
+                "service_family": "reference",
+                "resolution": "480p",
+                "duration_seconds": 5,
+            }),
+            status="succeeded",
+            output_path=self.video,
+        )
+        service.jobs[source.id] = source
+
+        card_response = await self.client.get(
+            f"/api/v1/jobs/{source.id}", headers=headers
+        )
+        self.assertEqual(card_response.status, 200)
+        card = await card_response.json()
+        self.assertFalse(card["video_repair_available"])
+
+        repair_response = await self.client.post(
+            f"/api/v1/jobs/{source.id}/video-repair",
+            headers=headers,
+            json={"acceleration": 50},
+        )
+        self.assertEqual(repair_response.status, 400)
+        self.assertIn(
+            "only for completed FL2VA source jobs",
+            await repair_response.text(),
+        )
+
+    async def test_completed_card_can_queue_temporal_video_second_sampling(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/generations", headers=headers, json={
+                "prompt": "distant faces and detailed shelves",
+                "resolution": "480p", "aspect_ratio": "16:9",
+                "duration_seconds": 5,
+            },
+        )
+        source_id = (await response.json())["id"]
+        for _ in range(80):
+            source = await (
+                await self.client.get(f"/api/v1/jobs/{source_id}", headers=headers)
+            ).json()
+            if source["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(source["status"], "succeeded")
+        self.assertEqual(
+            source["second_sampling_methods"], {"temporal": True, "h3": True}
+        )
+
+        service = self.app["job_service"]
+        service.upscaler = FakeUpscaler()
+        response = await self.client.post(
+            f"/api/v1/jobs/{source_id}/second-sampling",
+            headers=headers,
+            json={"method": "temporal", "resolution": "720p"},
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        child_id = (await response.json())["id"]
+        for _ in range(80):
+            child = await (
+                await self.client.get(f"/api/v1/jobs/{child_id}", headers=headers)
+            ).json()
+            if child["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(child["status"], "succeeded", child.get("error"))
+        self.assertEqual(child["second_sampling"]["method"], "temporal")
+        self.assertEqual(child["request"]["width"], 1280)
+        self.assertEqual(child["request"]["height"], 736)
+        self.assertEqual(
+            child["inference_plan"]["second_sampling_method"]["inference_steps"],
+            1,
+        )
+        self.assertEqual(
+            child["stage_seconds"],
+            {
+                "temporal_second_sampling.inference": 1.5,
+                "temporal_second_sampling.encode": 0.5,
+            },
+        )
+        video = await self.client.get(
+            f"/api/v1/jobs/{child_id}/video", headers=headers
+        )
+        self.assertEqual(await video.read(), b"test-video-upscaled")
+
+    async def test_infinite_project_appends_and_replaces_only_the_tail(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "title": "Cafe infinite",
+                "overview": "The same owner remains inside one fixed cafe.",
+                "overall_soundscape": "Continuous quiet cafe room tone.",
+                "non_diegetic_music": "N/A",
+                "overlap_seconds": 1.625,
+                "memory": 60,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project = await response.json()
+        project_id = project["id"]
+
+        async def append(description: str, **overrides):
+            payload = {
+                "window_description": description,
+                "duration_seconds": 5,
+                "model_variant": "base",
+                "sampling_steps": 20,
+                "acceleration": 0,
+                "seed": 100,
+                "resolution": "650p",
+                "aspect_ratio": "16:9",
+                "visual_memory_capacity": 12,
+                "audio_memory_capacity": 2,
+                "visual_memory_resolution": "480p",
+                "overlap_seconds": 1.625,
+                "save_shared_as_default": True,
+            }
+            payload.update(overrides)
+            response = await self.client.post(
+                f"/api/v1/infinite-projects/{project_id}/windows",
+                headers=headers,
+                json=payload,
+            )
+            self.assertEqual(response.status, 202, await response.text())
+            return (await response.json())["job"]["id"]
+
+        first_id = await append("A continuous counter shot establishes the owner.")
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+        self.assertEqual(project["window_count"], 1)
+        opening_job = await (
+            await self.client.get(
+                f"/api/v1/jobs/{first_id}", headers=headers
+            )
+        ).json()
+        self.assertNotIn("preview", opening_job)
+        self.assertEqual(opening_job["request"]["execution_mode"], "complete")
+
+        second_id = await append(
+            "Continue without a boundary cut. At 3 seconds, cut inside this "
+            "window to the reverse angle of the same counter.",
+            execution_mode="checkpoint",
+            checkpoint_step=9,
+            checkpoint_retain=True,
+            checkpoint_preview=True,
+            checkpoint_preview_steps=4,
+            checkpoint_preview_resolution="360p",
+        )
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"checkpointed", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "checkpointed")
+        self.assertEqual(project["window_count"], 2)
+        self.assertEqual(project["total_frames"], project["windows"][0]["total_frames"])
+        self.assertFalse(project["can_append"])
+        self.assertEqual(project["memory_capacity"]["video_slots"], 12)
+        self.assertEqual(project["memory_capacity"]["audio_slots"], 2)
+        self.assertEqual(project["memory_capacity"]["visual_resolution"], "480p")
+        self.assertEqual((project["width"], project["height"]), (1152, 640))
+        backend = self.app["job_service"].backend
+        self.assertEqual(backend.last_continuation.source_job_id, first_id)
+        self.assertEqual(backend.last_continuation.context_frames, 39)
+        self.assertEqual(backend.last_continuation.visual_memory_capacity, 12)
+        self.assertEqual(backend.last_continuation.audio_memory_capacity, 2)
+        self.assertEqual(backend.last_continuation.visual_memory_resolution, "480p")
+        self.assertEqual(
+            backend.last_spec.output_frames,
+            project["windows"][1]["total_frames"],
+        )
+        self.assertIn("strict continuation", backend.last_spec.prompt)
+        self.assertIn("cut inside this window", backend.last_spec.prompt)
+        self.assertEqual(backend.last_spec.preview_mode, "off")
+        self.assertFalse(backend.last_spec.preview_fast_finish)
+        self.assertEqual(backend.last_spec.execution_mode, "checkpoint")
+        self.assertEqual(backend.last_spec.checkpoint_step, 9)
+        second_job = await (
+            await self.client.get(
+                f"/api/v1/jobs/{second_id}", headers=headers
+            )
+        ).json()
+        self.assertTrue(second_job["preview"]["ready"])
+        self.assertTrue(second_job["checkpoint"]["resume_available"])
+        response = await self.client.get(
+            f"/api/v1/jobs/{second_id}/preview", headers=headers
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertEqual(
+            await response.read(), b"infinite-checkpoint-preview"
+        )
+
+        response = await self.client.post(
+            f"/api/v1/jobs/{second_id}/resume", headers=headers
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+        self.assertGreater(project["total_frames"], project["windows"][0]["total_frames"])
+        self.assertIsNotNone(backend.last_continuation_resume_checkpoint)
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/second-sampling",
+            headers=headers,
+            json={
+                "resolution": "1080p",
+                "steps": 2,
+                "acceleration": 75,
+                "strength": "preserve",
+                "temporal_window_frames": 136,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        second_sample_id = (await response.json())["id"]
+        for _ in range(60):
+            sampled = await (
+                await self.client.get(
+                    f"/api/v1/jobs/{second_sample_id}", headers=headers
+                )
+            ).json()
+            if sampled["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(sampled["status"], "succeeded")
+        self.assertEqual(sampled["request"]["output_frames"], project["total_frames"])
+        self.assertIn("Preserve the complete accepted source-latent", backend.last_spec.prompt)
+        self.assertIn("Add no new action, cut, object", backend.last_spec.prompt)
+
+        response = await self.client.delete(
+            f"/api/v1/infinite-projects/{project_id}/windows/last",
+            headers=headers,
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        rolled_back = await response.json()
+        self.assertEqual(rolled_back["window_count"], 1)
+        self.assertEqual(rolled_back["tail_job_id"], first_id)
+        self.assertNotIn(second_id, self.app["job_service"].jobs)
+
+        response = await self.client.delete(
+            f"/api/v1/infinite-projects/{project_id}", headers=headers
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        deleted = await response.json()
+        self.assertTrue(deleted["deleted"])
+        self.assertEqual(deleted["retained_job_count"], 1)
+        self.assertEqual(
+            (await self.client.get(
+                f"/api/v1/infinite-projects/{project_id}", headers=headers
+            )).status,
+            404,
+        )
+        self.assertEqual(
+            (await self.client.get(
+                f"/api/v1/jobs/{first_id}", headers=headers
+            )).status,
+            200,
+        )
+
+    async def test_locked_project_runs_json_previews_then_waits_for_final_sampling(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "workflow_version": 2,
+                "title": "JSON preview film",
+                "overview": "One fixed station concourse.",
+                "overall_soundscape": "Continuous station room tone.",
+                "non_diegetic_music": "N/A",
+                "preview_resolution": "540p",
+                "aspect_ratio": "16:9",
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "acceleration": 50,
+                "window_duration_seconds": 5,
+                "overlap_seconds": 0.75,
+                "visual_memory_capacity": 8,
+                "audio_memory_capacity": 1,
+                "visual_memory_resolution": "360p",
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project = await response.json()
+        project_id = project["id"]
+        self.assertTrue(project["trajectory_locked"])
+        self.assertEqual(project["preview_resolution"], "540p")
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/batch",
+            headers=headers,
+            json={
+                "overview": "The same fixed station with four people.",
+                "windows": [
+                    {"prompt": "[Shot 1] Establish the station.", "seed": 101},
+                    "[Shot 1] Continue exactly; the group crosses the concourse.",
+                ],
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+
+        for _ in range(120):
+            response = await self.client.get(
+                f"/api/v1/infinite-projects/{project_id}", headers=headers
+            )
+            project = await response.json()
+            if project["batch"]["status"] in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(
+            project["batch"]["status"],
+            "completed",
+            project["batch"].get("error"),
+        )
+        self.assertEqual(project["batch"]["cursor"], 2)
+        self.assertEqual(project["window_count"], 2)
+        self.assertEqual(project["tail_status"], "succeeded")
+        self.assertIsNone(project["final_sampling"]["job_id"])
+        self.assertTrue(project["second_sampling_available"])
+        self.assertEqual(
+            [item["batch_plan_index"] for item in project["windows"]],
+            [0, 1],
+        )
+        for item in project["windows"]:
+            job = self.app["job_service"].jobs[item["job_id"]]
+            self.assertEqual(job.spec.resolution, "540p")
+            self.assertEqual(job.spec.model_variant, "lora")
+            self.assertEqual(job.spec.sampling_steps, 8)
+            self.assertEqual(job.spec.acceleration, 50)
+            self.assertEqual(job.spec.execution_mode, "complete")
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/final-sampling",
+            headers=headers,
+            json={"method": "temporal", "resolution": "1080p", "steps": 4, "acceleration": 75},
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        final_id = (await response.json())["id"]
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["final_sampling"]["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["final_sampling"]["job_id"], final_id)
+        self.assertEqual(project["final_sampling"]["status"], "succeeded")
+        self.assertEqual(project["final_sampling"]["settings"]["method"], "h3")
+        self.assertIsNotNone(project["final_sampling"]["video_url"])
+
+    async def test_v3_online_windows_keep_locked_trajectory_and_allow_window_timing(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "workflow_version": 3,
+                "creation_mode": "online",
+                "title": "Editable online trajectory",
+                "overview": "One continuous workshop.",
+                "overall_soundscape": "Quiet machinery.",
+                "non_diegetic_music": "N/A",
+                "preview_resolution": "540p",
+                "final_resolution": "1080p",
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "final_sampling_steps": 5,
+                "preview_branch_steps": 3,
+                "acceleration": 50,
+                "second_pass_acceleration": 67,
+                "window_duration_seconds": 5,
+                "overlap_seconds": 0.75,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project = await response.json()
+        project_id = project["id"]
+        self.assertTrue(project["window_controls_editable"])
+
+        for index, controls in enumerate((
+            {
+                "duration_seconds": 4,
+                "overlap_seconds": 0.5,
+                "acceleration": 25,
+                "visual_memory_capacity": 3,
+                "audio_memory_capacity": 0,
+                "visual_memory_resolution": "480p",
+            },
+            {
+                "duration_seconds": 1,
+                "overlap_seconds": 0,
+                "acceleration": 35,
+                "visual_memory_capacity": 5,
+                "audio_memory_capacity": 2,
+                "visual_memory_resolution": "360p",
+            },
+        )):
+            response = await self.client.post(
+                f"/api/v1/infinite-projects/{project_id}/windows",
+                headers=headers,
+                json={
+                    "window_description": f"[Shot 1] Window {index + 1}.",
+                    "save_shared_as_default": True,
+                    **controls,
+                },
+            )
+            self.assertEqual(response.status, 202, await response.text())
+            for _ in range(80):
+                project = await (
+                    await self.client.get(
+                        f"/api/v1/infinite-projects/{project_id}", headers=headers
+                    )
+                ).json()
+                if project["tail_status"] in {"succeeded", "failed"}:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(project["tail_status"], "succeeded")
+
+        self.assertEqual(project["window_count"], 2)
+        self.assertEqual(project["window_duration_seconds"], 1)
+        self.assertEqual(project["overlap_seconds"], 0)
+        self.assertEqual(project["acceleration"], 35)
+        self.assertEqual(project["visual_memory_capacity"], 5)
+        self.assertEqual(project["audio_memory_capacity"], 2)
+        second = self.app["job_service"].jobs[project["windows"][1]["job_id"]]
+        self.assertEqual(second.spec.model_variant, "lora")
+        self.assertEqual(second.spec.sampling_steps, 8)
+        self.assertEqual(second.spec.acceleration, 35)
+        self.assertEqual(second.spec.second_pass_acceleration, 35)
+        self.assertEqual(second.infinite_continuation.context_frames, 0)
+        self.assertEqual(second.infinite_continuation.hidden_prefix_frames, 5)
+        self.assertTrue(second.spec.selflift_enabled)
+        self.assertEqual(second.spec.resolution, "1080p")
+        self.assertEqual(second.spec.selflift_initial_resolution, "540p")
+        self.assertEqual(second.spec.selflift_transition_step, 3)
+        self.assertEqual(second.spec.checkpoint_step, 3)
+        self.assertEqual(second.spec.checkpoint_preview_steps, 2)
+        self.assertIsNotNone(second.checkpoint_path)
+        self.assertTrue(second.checkpoint_path.is_file())
+        self.assertIsNotNone(second.final_latents_path)
+        self.assertTrue(second.final_latents_path.is_file())
+        self.assertEqual(project["windows"][1]["visual_memory_capacity"], 5)
+        self.assertEqual(project["final_generation_method"], "global_sliding_selflift")
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/final-sampling",
+            headers=headers,
+            json={"acceleration": 82, "sigma_scale": 0.75},
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        final_id = (await response.json())["id"]
+        for _ in range(80):
+            state = await (
+                await self.client.get(f"/api/v1/jobs/{final_id}", headers=headers)
+            ).json()
+            if state["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(state["status"], "succeeded")
+        backend = self.app["job_service"].backend
+        self.assertEqual(len(backend.last_infinite_selflift_sources), 2)
+        self.assertEqual(
+            state["inference_plan"]["infinite_selflift"]["schema_version"],
+            "global_sliding_selflift_v1",
+        )
+        project = await (
+            await self.client.get(
+                f"/api/v1/infinite-projects/{project_id}", headers=headers
+            )
+        ).json()
+        self.assertEqual(
+            project["final_sampling"]["settings"]["method"],
+            "global_sliding_selflift",
+        )
+        self.assertEqual(project["final_sampling"]["settings"]["resolution"], "1080p")
+        self.assertEqual(project["final_sampling"]["settings"]["steps"], 5)
+        self.assertEqual(project["final_sampling"]["settings"]["acceleration"], 82)
+        self.assertEqual(project["final_sampling"]["settings"]["sigma_scale"], 0.75)
+        final_job = self.app["job_service"].jobs[final_id]
+        self.assertEqual(final_job.spec.second_pass_acceleration, 82)
+        self.assertEqual(final_job.spec.selflift_sigma_scale, 0.75)
+        self.assertIsNotNone(backend.last_infinite_selflift_final_spec)
+        self.assertEqual(
+            backend.last_infinite_selflift_final_spec.second_pass_acceleration,
+            82,
+        )
+        self.assertEqual(
+            backend.last_infinite_selflift_final_spec.selflift_sigma_scale,
+            0.75,
+        )
+
+    async def test_v3_online_full_film_selflift_accepts_1440p_target(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "workflow_version": 3,
+                "creation_mode": "online",
+                "title": "1440P full-film SelfLift",
+                "preview_resolution": "540p",
+                "final_resolution": "1440p",
+                "aspect_ratio": "16:9",
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "final_sampling_steps": 2,
+                "preview_branch_steps": 2,
+                "acceleration": 50,
+                "second_pass_acceleration": 70,
+                "window_duration_seconds": 1,
+                "overlap_seconds": 0,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            json={
+                "window_description": "[Shot 1] One continuous test shot.",
+                "duration_seconds": 1,
+                "overlap_seconds": 0,
+                "acceleration": 50,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(80):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/final-sampling",
+            headers=headers,
+            json={"acceleration": 70},
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        final_id = (await response.json())["id"]
+        final_job = self.app["job_service"].jobs[final_id]
+        self.assertEqual(final_job.spec.resolution, "2k")
+        self.assertEqual((final_job.spec.width, final_job.spec.height), (2560, 1440))
+
+    async def test_infinite_window_can_inherit_replace_and_remove_keyframes(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "workflow_version": 3,
+                "creation_mode": "online",
+                "title": "Per-window keyframes",
+                "overview": "One continuous scene with stable subjects.",
+                "preview_resolution": "540p",
+                "final_resolution": "1080p",
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "final_sampling_steps": 2,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (32, 32), (40, 80, 120)).save(image_buffer, format="PNG")
+        image_bytes = image_buffer.getvalue()
+        opening = aiohttp.FormData(default_to_multipart=True)
+        opening.add_field("window_description", "Opening window")
+        opening.add_field("duration_seconds", "4")
+        opening.add_field("first_frame", image_bytes, filename="first.png", content_type="image/png")
+        opening.add_field("last_frame", image_bytes, filename="last.png", content_type="image/png")
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            data=opening,
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(80):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+        self.assertTrue(project["windows"][0]["conditioning"]["has_first_frame"])
+        self.assertTrue(project["windows"][0]["conditioning"]["has_last_frame"])
+
+        continuation = aiohttp.FormData(default_to_multipart=True)
+        continuation.add_field("window_description", "Continuation window")
+        continuation.add_field("duration_seconds", "4")
+        continuation.add_field("overlap_seconds", "1")
+        continuation.add_field("inherit_references", "true")
+        continuation.add_field("excluded_reference_roles", "first_frame")
+        continuation.add_field("last_frame", image_bytes, filename="new-last.png", content_type="image/png")
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            data=continuation,
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        continuation_id = (await response.json())["job"]["id"]
+        job = self.app["job_service"].jobs[continuation_id]
+        self.assertIsNone(job.first_frame)
+        self.assertIsNotNone(job.last_frame)
+        self.assertEqual(job.last_frame.name, "uploaded_last_frame.png")
+        for _ in range(80):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            json={
+                "window_description": "Too long after overlap",
+                "duration_seconds": 14.25,
+                "overlap_seconds": 1,
+            },
+        )
+        self.assertEqual(response.status, 400)
+        self.assertIn("continuation duration", await response.text())
+
+    async def test_v3_equal_resolution_keeps_fork_without_spatial_lift(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "workflow_version": 3,
+                "creation_mode": "online",
+                "title": "Identity handoff film",
+                "overview": "One continuous same-resolution room.",
+                "overall_soundscape": "Quiet room tone.",
+                "non_diegetic_music": "N/A",
+                "preview_resolution": "720p",
+                "final_resolution": "720p",
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "final_sampling_steps": 2,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            json={"window_description": "[Shot 1] One same-resolution window."},
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(80):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["tail_status"], "succeeded")
+        job_id = project["windows"][0]["job_id"]
+        job = self.app["job_service"].jobs[job_id]
+        self.assertTrue(job.spec.selflift_enabled)
+        self.assertEqual(job.spec.resolution, "720p")
+        self.assertEqual(job.spec.selflift_initial_resolution, "720p")
+        self.assertEqual(job.spec.selflift_transition_step, 6)
+        self.assertIsNotNone(job.checkpoint_path)
+
+    async def test_infinite_project_creation_requires_only_a_name(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={"title": "只创建项目容器"},
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project = await response.json()
+        self.assertEqual(project["title"], "只创建项目容器")
+        self.assertEqual(project["overview"], "")
+        self.assertEqual(project["overall_soundscape"], "N/A")
+        self.assertEqual(project["non_diegetic_music"], "N/A")
+        self.assertEqual(project["window_count"], 0)
+
+    async def test_infinite_fl2va_rejects_reference_only_media(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "title": "FL2VA text project",
+                "overview": "One continuous text-generated scene.",
+                "overall_soundscape": "Quiet room tone.",
+                "non_diegetic_music": "N/A",
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+        form = aiohttp.FormData(default_to_multipart=True)
+        for name, value in {
+            "window_description": "Establish the opening shot.",
+            "duration_seconds": "5",
+            "resolution": "480p",
+            "aspect_ratio": "16:9",
+        }.items():
+            form.add_field(name, value)
+        form.add_field(
+            "reference_image_1",
+            b"not-a-real-image",
+            filename="reference.png",
+            content_type="image/png",
+        )
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/windows",
+            headers=headers,
+            data=form,
+        )
+        self.assertEqual(response.status, 400, await response.text())
+        self.assertIn("use Ref2VA", await response.text())
+        project = await (
+            await self.client.get(
+                f"/api/v1/infinite-projects/{project_id}", headers=headers
+            )
+        ).json()
+        self.assertEqual(project["window_count"], 0)
+
+    async def test_infinite_missing_tail_is_directly_retryable(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            headers=headers,
+            json={
+                "title": "Retry missing tail",
+                "overview": "One stable room and one stable actor.",
+                "overall_soundscape": "Continuous room tone.",
+                "non_diegetic_music": "N/A",
+            },
+        )
+        project_id = (await response.json())["id"]
+
+        async def append(description: str) -> str:
+            response = await self.client.post(
+                f"/api/v1/infinite-projects/{project_id}/windows",
+                headers=headers,
+                json={
+                    "window_description": description,
+                    "duration_seconds": 5,
+                    "model_variant": "base",
+                    "sampling_steps": 20,
+                    "acceleration": 0,
+                    "seed": 7,
+                    "resolution": "480p",
+                    "aspect_ratio": "16:9",
+                    "memory": 60,
+                    "overlap_seconds": 1.625,
+                },
+            )
+            self.assertEqual(response.status, 202, await response.text())
+            return (await response.json())["job"]["id"]
+
+        opening_id = await append("Establish one continuous opening shot.")
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+
+        store = self.app["infinite_project_store"]
+        internal = store.require(project_id)
+        internal.windows.append({
+            "index": 1,
+            "job_id": "deleted-failed-job",
+            "requested_duration_seconds": 5,
+            "actual_duration_seconds": 4.958333333,
+            "context_frames": 39,
+            "overlap_seconds": 1.625,
+            "memory": 60,
+            "overview": internal.overview,
+            "window_description": "The failed tail description.",
+            "overall_soundscape": internal.overall_soundscape,
+            "non_diegetic_music": internal.non_diegetic_music,
+            "model_variant": "base",
+            "sampling_steps": 14,
+            "acceleration": 65,
+            "total_frames": 243,
+        })
+        store.persist(internal)
+        project = await (
+            await self.client.get(
+                f"/api/v1/infinite-projects/{project_id}", headers=headers
+            )
+        ).json()
+        self.assertEqual(project["tail_status"], "missing")
+        self.assertTrue(project["can_retry_tail"])
+        self.assertTrue(project["can_append"])
+
+        replacement_id = await append("Retry this tail from the accepted opening.")
+        self.assertNotEqual(replacement_id, "deleted-failed-job")
+        for _ in range(60):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}", headers=headers
+                )
+            ).json()
+            if project["tail_status"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(project["window_count"], 2)
+        self.assertEqual(project["windows"][0]["job_id"], opening_id)
+        self.assertEqual(project["windows"][1]["job_id"], replacement_id)
+        self.assertEqual(
+            self.app["job_service"].backend.last_continuation.source_job_id,
+            opening_id,
+        )
+
     async def test_latent_cache_clear_keeps_history_and_videos(self) -> None:
         service = self.app["job_service"]
         latent_root = service.output_root / ".h3-latents"
@@ -470,7 +1606,11 @@ class ApiTest(AioHTTPTestCase):
         self.assertIn(job.id, service.jobs)
         self.assertIsNone(service.jobs[job.id].final_latents_path)
         self.assertIsNone(service.jobs[job.id].checkpoint_path)
-        self.assertFalse(service.serialize(service.jobs[job.id])["second_sampling_available"])
+        public = service.serialize(service.jobs[job.id])
+        self.assertTrue(public["second_sampling_available"])
+        self.assertEqual(
+            public["second_sampling_methods"], {"temporal": True, "h3": False}
+        )
 
     async def test_w4a8_completed_card_exposes_second_sampling_entry(self) -> None:
         service = self.app["job_service"]
@@ -575,19 +1715,20 @@ class ApiTest(AioHTTPTestCase):
             await asyncio.sleep(0.01)
         self.assertEqual(state["status"], "succeeded")
         self.assertEqual(self.app["job_service"].backend.last_spec.prompt, prompt)
-        self.assertIsNone(self.prompt_enhancer.request)
 
-    async def test_1080p_duration_uses_the_native_pixel_frame_budget(self) -> None:
+    async def test_1080p_duration_transparently_crosses_the_native_window(self) -> None:
         headers = {"X-API-Key": "secret"}
-        rejected = await self.client.post(
+        long_request = await self.client.post(
             "/api/v1/generations", headers=headers, json={
-                "prompt": "too long at 1080p", "resolution": "1080p",
+                "prompt": "transparent long 1080p", "resolution": "1080p",
                 "aspect_ratio": "16:9", "duration_seconds": 15.5,
             },
         )
-        rejected_body = await rejected.text()
-        self.assertEqual(rejected.status, 400, rejected_body)
-        self.assertIn("at most 15.000 seconds", rejected_body)
+        self.assertEqual(long_request.status, 202, await long_request.text())
+        long_spec = (await long_request.json())["request"]
+        self.assertTrue(long_spec["long_horizon"])
+        self.assertEqual(long_spec["output_frames"], 379)
+        self.assertLessEqual(long_spec["frames"], 362)
 
         accepted = await self.client.post(
             "/api/v1/generations", headers=headers, json={
@@ -761,17 +1902,40 @@ class ApiTest(AioHTTPTestCase):
         )
         self.assertEqual(retried.status, 202, await retried.text())
 
-    async def test_fork_preview_is_replaced_by_second_sampling(self) -> None:
+    async def test_single_video_pause_preview_can_continue(self) -> None:
         headers = {"X-API-Key": "secret"}
         response = await self.client.post(
             "/api/v1/generations", headers=headers, json={
                 "prompt": "preview branch",
                 "preview_mode": "pause",
+                "preview_step_index": 5,
                 "preview_branch_steps": 2,
+                "preview_fast_finish": True,
             },
         )
-        self.assertEqual(response.status, 400)
-        self.assertIn("native H3 second sampling", await response.text())
+        self.assertEqual(response.status, 202, await response.text())
+        job_id = (await response.json())["id"]
+        for _ in range(100):
+            state = await (
+                await self.client.get(f"/api/v1/jobs/{job_id}", headers=headers)
+            ).json()
+            if state["status"] == "awaiting_preview":
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(state["status"], "awaiting_preview")
+        self.assertTrue(state["preview"]["ready"])
+        continued = await self.client.post(
+            f"/api/v1/jobs/{job_id}/preview/continue", headers=headers
+        )
+        self.assertEqual(continued.status, 200, await continued.text())
+        for _ in range(100):
+            state = await (
+                await self.client.get(f"/api/v1/jobs/{job_id}", headers=headers)
+            ).json()
+            if state["status"] == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(state["status"], "succeeded")
 
     async def test_checkpoint_preview_is_generated_and_resumable(self) -> None:
         headers = {"X-API-Key": "secret"}
@@ -879,7 +2043,7 @@ class ApiTest(AioHTTPTestCase):
             await asyncio.sleep(0.01)
         self.assertEqual(state["status"], "checkpointed")
         self.assertTrue(state["request"]["checkpoint_preview"])
-        self.assertEqual(state["request"]["checkpoint_preview_steps"], 4)
+        self.assertEqual(state["request"]["checkpoint_preview_steps"], 2)
         self.assertEqual(
             state["request"]["checkpoint_preview_resolution"], "360p"
         )
@@ -890,15 +2054,15 @@ class ApiTest(AioHTTPTestCase):
         response = await self.client.put(
             "/api/v1/settings/checkpoint-preview",
             headers=headers,
-            json={"steps": 6, "resolution": "480p"},
+            json={"steps": 4, "resolution": "480p"},
         )
         self.assertEqual(response.status, 200, await response.text())
         self.assertEqual(
             await response.json(),
             {
-                "steps": 6,
+                "steps": 4,
                 "resolution": "480p",
-                "step_range": {"min": 1, "max": 8},
+                "step_range": {"min": 1, "max": 4},
                 "resolutions": ["360p", "480p", "720p"],
             },
         )
@@ -915,12 +2079,141 @@ class ApiTest(AioHTTPTestCase):
         self.assertEqual(response.status, 202, await response.text())
         self.assertEqual(
             self.app["job_service"].backend.last_spec.checkpoint_preview_steps,
-            6,
+            4,
         )
         self.assertEqual(
             self.app["job_service"].backend.last_spec.checkpoint_preview_resolution,
             "480p",
         )
+
+    async def test_second_sampling_temporal_window_settings_are_shared(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        response = await self.client.put(
+            "/api/v1/settings/second-sampling-window",
+            headers=headers,
+            json={
+                "enabled": True,
+                "window_seconds": 5.0,
+                "overlap_seconds": 2.0,
+            },
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        policy = await response.json()
+        self.assertTrue(policy["enabled"])
+        self.assertEqual(policy["window_seconds"], 5.0)
+        self.assertEqual(policy["overlap_seconds"], 2.0)
+        self.assertEqual(policy["effective_window_frames"], 124)
+        self.assertEqual(policy["effective_stride_frames"], 51)
+        self.assertEqual(policy["effective_overlap_frames"], 73)
+        self.assertEqual(policy["effective_overlap_seconds"], 3.042)
+        self.assertEqual(
+            json.loads(
+                (self.temporary / "data/settings/second_sampling_window.json")
+                .read_text(encoding="utf-8")
+            ),
+            {
+                "enabled": True,
+                "window_seconds": 5.0,
+                "overlap_seconds": 2.0,
+            },
+        )
+
+        response = await self.client.post(
+            "/api/v1/generations",
+            headers=headers,
+            json={
+                "prompt": "windowed progressive generation",
+                "resolution": "720p",
+                "aspect_ratio": "1:1",
+                "duration_seconds": 5,
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "acceleration": 60,
+                "second_pass_acceleration": 70,
+                "selflift_enabled": True,
+                "selflift_initial_resolution": "540p",
+                "selflift_transition_step": 6,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        request = (await response.json())["request"]
+        self.assertTrue(request["selflift_temporal_window_enabled"])
+        self.assertEqual(request["selflift_temporal_window_seconds"], 5.0)
+        self.assertEqual(request["selflift_temporal_overlap_seconds"], 2.0)
+
+        response = await self.client.post(
+            "/api/v1/generations",
+            headers=headers,
+            json={
+                "prompt": "full-timeline progressive generation",
+                "resolution": "720p",
+                "aspect_ratio": "1:1",
+                "duration_seconds": 5,
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "acceleration": 60,
+                "second_pass_acceleration": 70,
+                "selflift_enabled": True,
+                "selflift_initial_resolution": "540p",
+                "selflift_transition_step": 6,
+                "selflift_temporal_window_enabled": False,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        unwindowed = (await response.json())["request"]
+        self.assertFalse(unwindowed["selflift_temporal_window_enabled"])
+
+        response = await self.client.post(
+            "/api/v1/generations",
+            headers=headers,
+            json={
+                "prompt": "windowed low-drift progressive generation",
+                "resolution": "720p",
+                "aspect_ratio": "1:1",
+                "duration_seconds": 5,
+                "model_variant": "lora",
+                "sampling_steps": 8,
+                "acceleration": 60,
+                "second_pass_acceleration": 70,
+                "selflift_enabled": True,
+                "selflift_initial_resolution": "540p",
+                "selflift_transition_step": 6,
+                "selflift_temporal_window_enabled": True,
+                "selflift_temporal_window_seconds": 8.0,
+                "selflift_temporal_overlap_seconds": 0.0,
+                "selflift_sigma_scale": 0.65,
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        windowed = (await response.json())["request"]
+        self.assertTrue(windowed["selflift_temporal_window_enabled"])
+        # Physical geometry comes from Service settings, not the task body.
+        self.assertEqual(windowed["selflift_temporal_window_seconds"], 5.0)
+        self.assertEqual(windowed["selflift_temporal_overlap_seconds"], 2.0)
+        self.assertEqual(windowed["selflift_sigma_scale"], 0.65)
+
+        maximum = await self.client.put(
+            "/api/v1/settings/second-sampling-window",
+            headers=headers,
+            json={"enabled": True, "window_seconds": 15},
+        )
+        self.assertEqual(maximum.status, 200, await maximum.text())
+        maximum_policy = await maximum.json()
+        self.assertEqual(maximum_policy["window_seconds"], 15.0)
+        self.assertEqual(maximum_policy["effective_window_frames"], 362)
+
+        invalid = await self.client.put(
+            "/api/v1/settings/second-sampling-window",
+            headers=headers,
+            json={"enabled": True, "window_seconds": 15.5},
+        )
+        self.assertEqual(invalid.status, 400)
+        invalid_overlap = await self.client.put(
+            "/api/v1/settings/second-sampling-window",
+            headers=headers,
+            json={"enabled": True, "window_seconds": 5, "overlap_seconds": 4.1},
+        )
+        self.assertEqual(invalid_overlap.status, 400)
 
     async def test_legacy_upscale_request_points_to_native_second_sampling(self) -> None:
         response = await self.client.post(
@@ -933,116 +2226,23 @@ class ApiTest(AioHTTPTestCase):
         self.assertEqual(response.status, 400)
         self.assertIn("native H3 second sampling", await response.text())
 
-    async def test_default_service_does_not_preload_retired_flashvsr(self) -> None:
+    async def test_default_service_reports_missing_temporal_runtime(self) -> None:
         status = self.app["job_service"].upscaler.status()
         self.assertFalse(status["ready"])
-        self.assertEqual(status["resident_state"], "removed")
-        self.assertIn("second-sampling", status["replacement"])
+        self.assertEqual(status["resident_state"], "unavailable")
+        self.assertIn("scripts/install.sh", status["remediation"])
 
-    async def test_mimo_enhancement_key_is_ephemeral_request_metadata(self) -> None:
-        storyboard = {
-            "shots": [{
-                "id": "shot-1", "duration_seconds": 5,
-                "prompt": "女孩沿海岸骑自行车，只有海风和链条声。",
-            }],
-            "bgm_enabled": False,
-            "bgm_style": "",
-        }
-        form = aiohttp.FormData()
-        form.add_field("storyboard", json.dumps(storyboard, ensure_ascii=False))
-        image_buffer = io.BytesIO()
-        Image.new("RGB", (16, 16), (30, 80, 120)).save(image_buffer, format="PNG")
-        form.add_field(
-            "reference_image_1", image_buffer.getvalue(),
-            filename="visual-reference.png", content_type="image/png",
-        )
-        audio_buffer = io.BytesIO()
-        with wave.open(audio_buffer, "wb") as writer:
-            writer.setnchannels(1)
-            writer.setsampwidth(2)
-            writer.setframerate(16_000)
-            writer.writeframes(b"\x00\x00" * 1_600)
-        form.add_field(
-            "reference_audio_1", audio_buffer.getvalue(),
-            filename="voice.wav", content_type="audio/wav",
-        )
-        response = await self.client.post(
+    async def test_prompt_polishing_routes_are_removed(self) -> None:
+        studio = await self.client.post(
             "/studio/prompt-enhancements",
-            headers={"X-API-Key": "secret", "X-MiMo-API-Key": "mimo-secret"},
-            data=form,
-        )
-        self.assertEqual(response.status, 200)
-        result = await response.json()
-        self.assertEqual(result["soundtrack"]["non_diegetic_music"], "N/A")
-        self.assertEqual(self.prompt_enhancer.api_key, "mimo-secret")
-        self.assertEqual(self.prompt_enhancer.request.condition_mode, "T2VA")
-        self.assertEqual(self.prompt_enhancer.images[0][0], "<Picture 1>")
-        self.assertEqual(self.prompt_enhancer.audios[0][0], "<Audio 1>")
-        self.assertEqual(self.prompt_enhancer.audios[0][1], "audio/wav")
-        self.assertEqual(len(self.app["job_service"].jobs), 0)
-
-    async def test_prompt_enhancement_is_not_a_public_api_route(self) -> None:
-        response = await self.client.post(
-            "/api/v1/prompt-enhancements",
             headers={"X-API-Key": "secret"},
             data={"storyboard": "{}"},
         )
-        self.assertEqual(response.status, 404)
-
-    async def test_console_mimo_key_is_shared_in_memory_with_api_clients(self) -> None:
-        response = await self.client.put(
-            "/api/v1/settings/mimo-key",
-            headers={"X-API-Key": "secret"},
-            json={"api_key": "console-mimo-secret"},
-        )
-        self.assertEqual(response.status, 200)
-        self.assertEqual(await response.json(), {"configured": True})
-
-        status = await self.client.get(
+        settings = await self.client.get(
             "/api/v1/settings/mimo-key", headers={"X-API-Key": "secret"}
         )
-        self.assertEqual(await status.json(), {"configured": True})
-
-        storyboard = {
-            "shots": [{"id": "shot-1", "duration_seconds": 5,
-                       "prompt": "女孩沿海岸骑车，保留海风声。"}],
-            "bgm_enabled": False,
-            "bgm_style": "",
-        }
-        response = await self.client.post(
-            "/studio/prompt-enhancements",
-            headers={"X-API-Key": "secret"},
-            data={"storyboard": json.dumps(storyboard, ensure_ascii=False)},
-        )
-        self.assertEqual(response.status, 200, await response.text())
-        self.assertEqual(self.prompt_enhancer.api_key, "console-mimo-secret")
-
-        cleared = await self.client.put(
-            "/api/v1/settings/mimo-key",
-            headers={"X-API-Key": "secret"},
-            json={"api_key": ""},
-        )
-        self.assertEqual(await cleared.json(), {"configured": False})
-
-    async def test_console_mimo_key_persists_privately_and_can_be_cleared(self) -> None:
-        response = await self.client.put(
-            "/api/v1/settings/mimo-key",
-            headers={"X-API-Key": "secret"},
-            json={"api_key": "persistent-console-secret"},
-        )
-        self.assertEqual(response.status, 200)
-        key_path = _mimo_key_path(self.temporary / "data")
-        self.assertEqual(_load_persisted_mimo_key(self.temporary / "data"),
-                         "persistent-console-secret")
-        self.assertEqual(key_path.stat().st_mode & 0o777, 0o600)
-
-        response = await self.client.put(
-            "/api/v1/settings/mimo-key",
-            headers={"X-API-Key": "secret"},
-            json={"api_key": ""},
-        )
-        self.assertEqual(response.status, 200)
-        self.assertFalse(key_path.exists())
+        self.assertEqual(studio.status, 404)
+        self.assertEqual(settings.status, 404)
 
     async def test_resource_snapshot_exposes_host_and_gpu_contract(self) -> None:
         response = await self.client.get(
@@ -1052,9 +2252,24 @@ class ApiTest(AioHTTPTestCase):
         document = await response.json()
         self.assertIn("cpu", document)
         self.assertIn("memory", document)
+        self.assertIn("service_memory", document)
         self.assertIn("gpu", document)
         self.assertIn("queue", document)
         self.assertGreater(document["memory"]["total_gib"], 0)
+        self.assertIn("available_gib", document["memory"])
+        self.assertIn("occupied_gib", document["memory"])
+        self.assertIn("reclaimable_gib", document["memory"])
+        self.assertGreaterEqual(
+            document["memory"]["occupied_gib"], document["memory"]["used_gib"]
+        )
+        self.assertEqual(document["memory"]["scope"], "linux_host")
+        self.assertIn("used_gib", document["service_memory"])
+        self.assertIn("limit_gib", document["service_memory"])
+        self.assertIn("resident_gib", document["service_memory"])
+        self.assertEqual(document["service_memory"]["resident_metric"], "pss")
+        self.assertNotEqual(
+            document["service_memory"].get("scope"), "whole_machine"
+        )
 
     async def test_queue_reorder_and_record_delete_contract(self) -> None:
         headers = {"X-API-Key": "secret"}
@@ -1116,6 +2331,71 @@ class ApiTest(AioHTTPTestCase):
         self.assertTrue(legacy_output.is_file())
         self.assertNotIn(job.id, service.jobs)
         self.assertFalse((service.data_dir / "jobs" / f"{job.id}.json").exists())
+
+    async def test_batch_record_delete_is_deduplicated_and_best_effort(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        service = self.app["job_service"]
+        service.output_root.mkdir(parents=True, exist_ok=True)
+
+        deleted_jobs = []
+        deleted_outputs = []
+        for index in range(2):
+            output = service.output_root / f"batch-{index}.mp4"
+            output.write_bytes(f"batch-{index}".encode())
+            job = JobRecord(
+                id=f"batch-delete-{index}",
+                spec=GenerationSpec.from_mapping({
+                    "prompt": f"batch {index}", "seed": index + 20,
+                }),
+                status="succeeded",
+                output_path=output,
+            )
+            service.jobs[job.id] = job
+            service.cancel_events[job.id] = asyncio.Event()
+            service.persist(job)
+            deleted_jobs.append(job)
+            deleted_outputs.append(output)
+
+        active = JobRecord(
+            id="batch-active",
+            spec=GenerationSpec.from_mapping({"prompt": "active", "seed": 30}),
+            status="running",
+        )
+        service.jobs[active.id] = active
+        service.cancel_events[active.id] = asyncio.Event()
+        service.persist(active)
+
+        response = await self.client.delete(
+            "/api/v1/jobs/records",
+            headers=headers,
+            json={"job_ids": [
+                deleted_jobs[0].id,
+                deleted_jobs[1].id,
+                deleted_jobs[0].id,
+                "missing-batch-job",
+                active.id,
+            ]},
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        document = await response.json()
+        self.assertEqual(document["requested_count"], 4)
+        self.assertEqual(document["deleted_count"], 2)
+        self.assertEqual(document["deleted_ids"], [job.id for job in deleted_jobs])
+        self.assertEqual(
+            {item["id"] for item in document["errors"]},
+            {"missing-batch-job", active.id},
+        )
+        self.assertTrue(all(not output.exists() for output in deleted_outputs))
+        self.assertTrue(all(job.id not in service.jobs for job in deleted_jobs))
+        self.assertIn(active.id, service.jobs)
+
+    async def test_batch_record_delete_rejects_empty_or_oversized_selection(self) -> None:
+        headers = {"X-API-Key": "secret"}
+        for job_ids in ([], [f"job-{index}" for index in range(101)]):
+            response = await self.client.delete(
+                "/api/v1/jobs/records", headers=headers, json={"job_ids": job_ids}
+            )
+            self.assertEqual(response.status, 400)
 
     async def test_persisted_fifteen_second_job_round_trips(self) -> None:
         data = self.temporary / "roundtrip"
@@ -1263,13 +2543,13 @@ class UnifiedConsoleApiTest(AioHTTPTestCase):
         options = await (await self.client.get("/api/v1/options")).json()
         self.assertEqual(options["current_launcher"], "fl2va_w4a8_8gb")
         self.assertEqual(options["active_weight_tier"], "w4a8")
-        self.assertEqual(options["resolutions"], ["360p", "480p", "720p"])
+        self.assertEqual(options["resolutions"], ["360p", "480p", "540p", "720p"])
         self.assertTrue(
             options["advanced_limits"]["second_sampling"]["available"]
         )
         self.assertEqual(
             options["advanced_limits"]["second_sampling"]["levels"],
-            ["720p", "1080p"],
+            ["720p", "900p", "1080p"],
         )
 
         response = await self.client.delete("/api/v1/engine")
@@ -1282,12 +2562,75 @@ class UnifiedConsoleApiTest(AioHTTPTestCase):
         options = await (await self.client.get("/api/v1/options")).json()
         self.assertEqual(options["active_vram_profile"], "16gb")
         self.assertEqual(
-            options["resolutions"], ["360p", "480p", "720p", "1080p"]
+            options["resolutions"],
+            ["360p", "480p", "540p", "720p", "900p", "1080p"],
         )
         self.assertEqual(
             options["advanced_limits"]["second_sampling"]["levels"],
-            ["720p", "1080p", "1440p"],
+            ["720p", "900p", "1080p", "1220p", "1440p"],
         )
+
+    async def test_four_product_choices_auto_route_vram_and_compile_ram_budget(self) -> None:
+        options = await (await self.client.get("/api/v1/options")).json()
+        self.assertEqual(
+            set(options["model_choices"]),
+            {"fl2va_w4a8", "ref2va_w4a8", "fl2va_int8", "ref2va_int8"},
+        )
+        self.assertEqual(
+            options["host_memory"]["budget_ranges"]["w4a8"]["minimum_gib"],
+            12,
+        )
+        self.assertEqual(
+            options["host_memory"]["budget_ranges"]["int8"]["minimum_gib"],
+            24,
+        )
+        response = await self.client.put(
+            "/api/v1/engine",
+            json={
+                "service_family": "first_last",
+                "weight_tier": "w4a8",
+                "host_memory_limit_gib": 12,
+            },
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        # The development 4090 is detected as 24GB, but that tier is internal.
+        self.assertEqual(self.backend.preloaded, "fl2va_w4a8_24gb")
+        options = await (await self.client.get("/api/v1/options")).json()
+        self.assertEqual(options["active_vram_profile"], "24gb")
+        self.assertEqual(options["active_weight_tier"], "w4a8")
+        self.assertEqual(
+            options["resolutions"],
+            ["360p", "480p", "540p", "720p", "900p", "1080p"],
+        )
+        self.assertEqual(options["host_memory"]["profile"]["process_limit_gib"], 12)
+        self.assertEqual(
+            options["host_memory"]["profile"]["evidence"],
+            "experimental_low_memory",
+        )
+
+        response = await self.client.delete("/api/v1/engine")
+        self.assertEqual(response.status, 200, await response.text())
+        response = await self.client.put(
+            "/api/v1/engine",
+            json={
+                "service_family": "reference",
+                "weight_tier": "int8",
+                "host_memory_limit_gib": 24,
+            },
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        # INT8 uses exactly the same product contract: VRAM is internal and
+        # the selected RAM value becomes the service-process ceiling.
+        self.assertEqual(self.backend.preloaded, "ref2va_int8_24gb")
+        options = await (await self.client.get("/api/v1/options")).json()
+        self.assertEqual(options["active_vram_profile"], "24gb")
+        self.assertEqual(options["active_weight_tier"], "int8")
+        self.assertEqual(options["host_memory"]["profile"]["process_limit_gib"], 24)
+        self.assertEqual(options["host_memory"]["profile"]["evidence"], "experimental_low_memory")
+        self.assertEqual(options["host_memory"]["enforcement"]["limit_gib"], 24)
+        resources = await (await self.client.get("/api/v1/resources")).json()
+        self.assertEqual(resources["service_memory"]["limit_gib"], 24)
+        self.assertNotEqual(resources["service_memory"]["scope"], "whole_machine")
 
     async def test_16gb_completed_card_can_queue_1440p_second_sampling(self) -> None:
         response = await self.client.put(
@@ -1429,13 +2772,11 @@ class ReferenceApiTest(AioHTTPTestCase):
         serve_dir = Path(__file__).resolve().parents[1]
         paths = ServicePaths.defaults(self.temporary, data_dir=self.temporary / "data")
         self.backend = FakeBackend(self.video)
-        self.prompt_enhancer = FakePromptEnhancer()
         return create_app(
             paths=paths,
             serve_dir=serve_dir,
             backend=self.backend,
             fixed_engine="reference",
-            prompt_enhancer=self.prompt_enhancer,
         )
 
     async def asyncTearDown(self) -> None:
@@ -1481,6 +2822,248 @@ class ReferenceApiTest(AioHTTPTestCase):
         self.assertEqual(len(self.backend.reference_images), 1)
         self.assertEqual(self.backend.reference_images[0].name, "reference_image_1.png")
 
+    async def test_v3_json_project_loads_opening_reference_id_path_mapping(self) -> None:
+        reference = self.temporary / "panorama.png"
+        Image.new("RGB", (64, 40), (70, 90, 120)).save(reference, format="PNG")
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            json={
+                "workflow_version": 3,
+                "creation_mode": "json",
+                "title": "Reference one-click film",
+                "overview": "Keep <Picture 1> as the scene and character anchor.",
+                "overall_soundscape": "A continuous room tone.",
+                "non_diegetic_music": "N/A",
+                "preview_resolution": "540p",
+                "final_resolution": "1080p",
+                "model_variant": "base",
+                "sampling_steps": 5,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/batch",
+            json={
+                "references": {"Picture 1": {"path": str(reference)}},
+                "final_acceleration": 64,
+                "windows": [
+                    {
+                        "prompt": "[Shot 1] Establish <Picture 1> exactly.",
+                        "duration_seconds": 2,
+                        "acceleration": 30,
+                    },
+                    "[Shot 1] Continue the exact same shot and motion.",
+                ],
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(180):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}"
+                )
+            ).json()
+            if project["batch"]["status"] in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(
+            project["batch"]["status"],
+            "completed",
+            project["batch"].get("error"),
+        )
+        self.assertEqual(project["batch"]["reference_ids"], ["Picture 1"])
+        self.assertNotIn(str(reference), json.dumps(project))
+        self.assertEqual(project["window_count"], 2)
+        self.assertEqual(len(self.backend.reference_images), 1)
+        self.assertEqual(self.backend.reference_images[0].name, "reference_image_1.png")
+        first = self.app["job_service"].jobs[project["windows"][0]["job_id"]]
+        self.assertEqual(first.spec.acceleration, 30)
+        self.assertEqual(first.spec.second_pass_acceleration, 30)
+        self.assertIn("<Picture 1>", first.spec.prompt)
+        jobs = [
+            self.app["job_service"].jobs[item["job_id"]]
+            for item in project["windows"]
+        ]
+        for job in jobs:
+            self.assertTrue(job.spec.selflift_enabled)
+            self.assertEqual(job.spec.resolution, "1080p")
+            self.assertEqual(job.spec.selflift_initial_resolution, "540p")
+            self.assertEqual(job.spec.execution_mode, "checkpoint")
+            self.assertIsNotNone(job.spec.checkpoint_step)
+            self.assertFalse(job.spec.checkpoint_preview)
+            self.assertIsNotNone(job.checkpoint_path)
+        self.assertFalse(project["window_controls_editable"])
+        self.assertFalse(project["second_sampling_available"])
+        self.assertEqual(
+            project["final_generation_method"], "global_sliding_selflift"
+        )
+        self.assertNotEqual(project["final_sampling"]["job_id"], jobs[-1].id)
+        self.assertEqual(project["final_sampling"]["status"], "succeeded")
+        self.assertEqual(
+            project["final_sampling"]["settings"]["method"],
+            "global_sliding_selflift",
+        )
+        self.assertTrue(
+            project["final_sampling"]["settings"]["shared_preview_prefix"]
+        )
+        self.assertEqual(project["final_sampling"]["settings"]["acceleration"], 64)
+        final_job = self.app["job_service"].jobs[
+            project["final_sampling"]["job_id"]
+        ]
+        self.assertEqual(final_job.spec.second_pass_acceleration, 64)
+        self.assertIsNotNone(project["final_sampling"]["video_url"])
+
+        # Older clients may still call final-sampling after a JSON batch. It
+        # returns the existing tail and must not enqueue the online fork path.
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/final-sampling",
+            json={},
+        )
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertEqual(
+            (await response.json())["id"],
+            project["final_sampling"]["job_id"],
+        )
+        self.assertEqual(len(self.backend.last_infinite_selflift_sources), 2)
+
+    async def test_v3_ref_json_supports_independent_references_per_window(self) -> None:
+        references = []
+        for index, colour in enumerate(((170, 20, 30), (20, 170, 40), (30, 50, 190)), start=1):
+            path = self.temporary / f"window-{index}.png"
+            Image.new("RGB", (64, 40), colour).save(path, format="PNG")
+            references.append(path)
+        response = await self.client.post(
+            "/api/v1/infinite-projects",
+            json={
+                "workflow_version": 3,
+                "creation_mode": "json",
+                "service_family": "reference",
+                "title": "Per-window Ref2VA references",
+                "preview_resolution": "540p",
+                "final_resolution": "720p",
+                "model_variant": "base",
+                "sampling_steps": 5,
+            },
+        )
+        self.assertEqual(response.status, 201, await response.text())
+        project_id = (await response.json())["id"]
+        response = await self.client.post(
+            f"/api/v1/infinite-projects/{project_id}/batch",
+            json={
+                "windows": [
+                    {
+                        "prompt": "[Shot 1] Establish <Picture 1>.",
+                        "duration_seconds": 2,
+                        "references": {
+                            "Picture 1": {"path": str(references[0])},
+                        },
+                    },
+                    {
+                        "prompt": (
+                            "[Shot 1] Continue using this window's "
+                            "<Picture 1> and <Picture 2>."
+                        ),
+                        "duration_seconds": 2,
+                        "references": {
+                            "Picture 1": {"path": str(references[1])},
+                            "Picture 2": {"path": str(references[2])},
+                        },
+                    },
+                    {
+                        "prompt": (
+                            "[Shot 1] Continue with the inherited "
+                            "<Picture 1> and <Picture 2>."
+                        ),
+                        "duration_seconds": 2,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(response.status, 202, await response.text())
+        for _ in range(240):
+            project = await (
+                await self.client.get(
+                    f"/api/v1/infinite-projects/{project_id}"
+                )
+            ).json()
+            if project["batch"]["status"] in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(
+            project["batch"]["status"],
+            "completed",
+            project["batch"].get("error"),
+        )
+        jobs = [
+            self.app["job_service"].jobs[item["job_id"]]
+            for item in project["windows"]
+        ]
+        self.assertEqual(
+            [len(job.reference_images) for job in jobs],
+            [1, 2, 2],
+        )
+        self.assertEqual(
+            [Image.open(path).getpixel((0, 0)) for path in jobs[0].reference_images],
+            [(170, 20, 30)],
+        )
+        expected_replacement = [(20, 170, 40), (30, 50, 190)]
+        for job in jobs[1:]:
+            self.assertEqual(
+                [Image.open(path).getpixel((0, 0)) for path in job.reference_images],
+                expected_replacement,
+            )
+        self.assertEqual(
+            [item["reference_ids"] for item in project["batch"]["plan"]],
+            [
+                ["Picture 1"],
+                ["Picture 1", "Picture 2"],
+                ["Picture 1", "Picture 2"],
+            ],
+        )
+        serialized = json.dumps(project)
+        for path in references:
+            self.assertNotIn(str(path), serialized)
+
+    async def test_v3_ref_json_rejects_invalid_window_reference_sets(self) -> None:
+        reference = self.temporary / "reference.png"
+        Image.new("RGB", (64, 40), (60, 80, 100)).save(reference, format="PNG")
+        invalid_sets = (
+            ({}, "requires Picture or Audio references"),
+            (
+                {"Picture 2": {"path": str(reference)}},
+                "Picture IDs must be contiguous from 1",
+            ),
+        )
+        for invalid_references, expected_error in invalid_sets:
+            with self.subTest(references=invalid_references):
+                response = await self.client.post(
+                    "/api/v1/infinite-projects",
+                    json={
+                        "workflow_version": 3,
+                        "creation_mode": "json",
+                        "service_family": "reference",
+                        "title": "Invalid per-window references",
+                        "preview_resolution": "540p",
+                        "final_resolution": "720p",
+                        "model_variant": "base",
+                        "sampling_steps": 5,
+                    },
+                )
+                self.assertEqual(response.status, 201, await response.text())
+                project_id = (await response.json())["id"]
+                response = await self.client.post(
+                    f"/api/v1/infinite-projects/{project_id}/batch",
+                    json={
+                        "windows": [{
+                            "prompt": "[Shot 1] Establish the opening.",
+                            "references": invalid_references,
+                        }],
+                    },
+                )
+                self.assertEqual(response.status, 400)
+                self.assertIn(expected_error, await response.text())
+
     async def test_reference_generation_forwards_one_raw_prompt_without_enhancement(self) -> None:
         prompt = "  subject_definitions:\n<Subject 1> from <Picture 1>.\n  "
         image_buffer = io.BytesIO()
@@ -1503,7 +3086,6 @@ class ReferenceApiTest(AioHTTPTestCase):
             await asyncio.sleep(0.01)
         self.assertEqual(state["status"], "succeeded")
         self.assertEqual(self.backend.last_spec.prompt, prompt)
-        self.assertIsNone(self.prompt_enhancer.request)
 
     async def test_reference_media_console_policy_is_shared_default(self) -> None:
         response = await self.client.put(
@@ -1553,31 +3135,6 @@ class ReferenceApiTest(AioHTTPTestCase):
         )
         self.assertEqual(bad.status, 400)
 
-    async def test_reference_prompt_enhancement_uses_uppercase_ref2va_contract(self) -> None:
-        storyboard = {
-            "shots": [{"id": "one", "duration_seconds": 5,
-                       "prompt": "女孩参考<Picture 1>走进房间。"}],
-            "reference_media": [{
-                "kind": "image", "name": "girl.png", "mime_type": "image/png",
-                "role": "女孩身份参考",
-            }],
-        }
-        image_buffer = io.BytesIO()
-        Image.new("RGB", (16, 16), (80, 40, 120)).save(image_buffer, format="PNG")
-        form = aiohttp.FormData()
-        form.add_field("storyboard", json.dumps(storyboard, ensure_ascii=False))
-        form.add_field(
-            "reference_image_1", image_buffer.getvalue(),
-            filename="girl.png", content_type="image/png",
-        )
-        response = await self.client.post(
-            "/studio/prompt-enhancements",
-            headers={"X-MiMo-API-Key": "mimo-secret"},
-            data=form,
-        )
-        self.assertEqual(response.status, 200, await response.text())
-        self.assertEqual(self.prompt_enhancer.request.condition_mode, "REF2VA")
-
     async def test_reference_video_is_persisted_and_forwarded(self) -> None:
         buffer = io.BytesIO()
         with av.open(buffer, "w", format="mp4") as container:
@@ -1597,36 +3154,6 @@ class ReferenceApiTest(AioHTTPTestCase):
         self.assertEqual(response.status, 202, await response.text())
         self.assertEqual(len(self.backend.reference_videos), 1)
         self.assertEqual(self.backend.reference_videos[0].name, "reference_video_1.mp4")
-
-    async def test_reference_video_is_forwarded_to_mimo_prompt_enhancement(self) -> None:
-        buffer = io.BytesIO()
-        with av.open(buffer, "w", format="mp4") as container:
-            stream = container.add_stream("mpeg4", rate=24)
-            stream.width, stream.height, stream.pix_fmt = 64, 48, "yuv420p"
-            for index in range(48):
-                pixels = np.full((48, 64, 3), index, dtype=np.uint8)
-                for packet in stream.encode(av.VideoFrame.from_ndarray(pixels, format="rgb24")):
-                    container.mux(packet)
-            for packet in stream.encode():
-                container.mux(packet)
-        storyboard = {
-            "shots": [{"id": "one", "duration_seconds": 2,
-                       "prompt": "保持<Video 1>中的骑行运动。"}],
-            "reference_media": [{
-                "kind": "video", "name": "motion.mp4", "mime_type": "video/mp4",
-                "role": "<Video 1> motion and camera reference",
-            }],
-        }
-        form = aiohttp.FormData()
-        form.add_field("storyboard", json.dumps(storyboard, ensure_ascii=False))
-        form.add_field("reference_video_1", buffer.getvalue(), filename="motion.mp4", content_type="video/mp4")
-        response = await self.client.post(
-            "/studio/prompt-enhancements",
-            headers={"X-MiMo-API-Key": "mimo-secret"}, data=form,
-        )
-        self.assertEqual(response.status, 200, await response.text())
-        self.assertEqual(self.prompt_enhancer.videos[0][0], "<Video 1>")
-        self.assertEqual(self.prompt_enhancer.videos[0][1], "video/mp4")
 
     async def test_reference_audio_is_persisted_and_forwarded(self) -> None:
         buffer = io.BytesIO()

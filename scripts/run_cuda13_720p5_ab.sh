@@ -7,8 +7,8 @@ python="${H3_SERVE_PYTHON:-${release_root}/runtime/venv/bin/python}"
 python="$(readlink -f -- "${python}")"
 output_root="${1:-${H3_BENCHMARK_OUTPUT_ROOT:-${release_root}/runtime/benchmarks/cu133_torch213_720p5}}"
 sparge_root="${release_root}/runtime/extensions/sparge-sm89-py310-torch213-cu133"
-minimax_source="${H3_SERVE_MINIMAX_SOURCE:-${workspace_root}/runtime/vendor/MiniMax-H3}"
-lightx_source="${H3_SERVE_LIGHTX_SOURCE:-${workspace_root}/runtime/vendor/LightX2V}"
+minimax_source="${H3_SERVE_MINIMAX_SOURCE:-${workspace_root}/subprojects-main/main/MiniMax-H3}"
+lightx_source="${H3_SERVE_LIGHTX_SOURCE:-${workspace_root}/subprojects-main/backend-compare/sources/LightX2V}"
 
 [[ -x "${python}" ]] || { echo "missing runtime: ${python}" >&2; exit 1; }
 [[ -d "${sparge_root}" ]] || { echo "missing SpargeAttention build: ${sparge_root}" >&2; exit 1; }

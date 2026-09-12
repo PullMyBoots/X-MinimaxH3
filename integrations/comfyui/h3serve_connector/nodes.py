@@ -59,6 +59,7 @@ PRESET_ASPECT_RATIOS = {
     "16:9": (16, 9), "9:16": (9, 16),
 }
 MAX_NATIVE_PIXEL_FRAMES = 1920 * 1088 * 192
+MAX_LONG_HORIZON_SECONDS = 60.0
 
 
 def _acceleration_value(value: Any) -> float:
@@ -809,7 +810,7 @@ class H3ServePresetGenerate:
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""}),
                 "resolution": (["360p", "480p", "720p", "1080p"], {"default": "480p"}),
                 "aspect_ratio": (["1:1", "4:3", "3:4", "16:9", "9:16"], {"default": "16:9"}),
-                "duration_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.5}),
+                "duration_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": MAX_LONG_HORIZON_SECONDS, "step": 0.5}),
                 "sampling_steps": ("INT", {"default": 8, "min": 4, "max": 30, "step": 1}),
                 "acceleration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 1.0}),
                 "model_variant": (list(MODEL_VARIANTS), {"default": "原始权重"}),
@@ -905,7 +906,7 @@ class H3ServeAdvancedGenerate:
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""}),
                 "width": ("INT", {"default": 864, "min": 192, "max": 1920, "step": 32}),
                 "height": ("INT", {"default": 480, "min": 192, "max": 1920, "step": 32}),
-                "duration_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.5}),
+                "duration_seconds": ("FLOAT", {"default": 5.0, "min": 1.0, "max": MAX_LONG_HORIZON_SECONDS, "step": 0.5}),
                 "sampling_steps": ("INT", {"default": 8, "min": 4, "max": 30, "step": 1}),
                 "acceleration": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 1.0}),
                 "model_variant": (list(MODEL_VARIANTS), {"default": "原始权重"}),
@@ -1061,7 +1062,7 @@ def _english_interactive_preset_schema() -> dict[str, Any]:
                 {"default": "16:9"},
             ),
             "duration_seconds": (
-                "FLOAT", {"default": 5.0, "min": 1.0, "max": 15.0, "step": 0.5},
+                "FLOAT", {"default": 5.0, "min": 1.0, "max": MAX_LONG_HORIZON_SECONDS, "step": 0.5},
             ),
             "sampling_steps": (
                 "INT", {"default": 8, "min": 4, "max": 30, "step": 1},

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 import torch.nn as nn
@@ -69,6 +71,34 @@ class H3BlockOffloadTest(unittest.TestCase):
         stack.configure_block_executor(executor)
         actual = self._run(stack)
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_8gb_single_buffer_compacts_only_under_next_block_pressure(self) -> None:
+        gib = 1024**3
+        config = RuntimeConfig(
+            device="cpu",
+            max_device_bytes=int(7.25 * gib),
+            block_buffer_count=1,
+            pin_host_weights=False,
+            weight_tier="w4a8",
+            backend_profile="w4a8_8gb",
+        )
+        executor = build_h3_block_executor(
+            self._stack().blocks, config, prefetch_depth=0
+        )
+        hook = executor._between_block_hook
+        self.assertIsNotNone(hook)
+        one_gib_hidden = SimpleNamespace(
+            numel=lambda: gib // 2,
+            element_size=lambda: 2,
+        )
+        with (
+            patch("torch.cuda.memory_reserved", return_value=int(6.5 * gib)),
+            patch("torch.cuda.synchronize") as synchronize,
+            patch("torch.cuda.empty_cache") as empty_cache,
+        ):
+            hook(one_gib_hidden)
+        synchronize.assert_called_once_with("cpu")
+        empty_cache.assert_called_once_with()
 
     def test_range_offset_loads_the_requested_sources(self) -> None:
         stack = self._stack()

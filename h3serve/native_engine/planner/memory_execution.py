@@ -99,14 +99,24 @@ _W4_COMPACT_HARD8_SINGLE_BUFFER_BYTES = int(round(4.55 * _GIB))
 # The exact temporal host sink was physically measured on SM89 at
 # 1920x1088x362: 8.500 GiB versus 16.952 GiB for the materialized FP32 concat,
 # 82.58s versus 82.78s, with an identical final uint8 SHA-256.  Its live
-# decoder working set scales with one spatial canvas but not total duration;
-# the materialized graph adds exactly one 3-channel FP32 output tensor.
+# decoder working set scales with one spatial canvas but not total duration.
+# Decoder materialization adds one 3-channel FP32 output tensor; the later
+# single-tensor pixel transform adds a second clip-sized FP32 workspace.
 _VAE_FIXED_MODEL_BYTES = int(round(5.15 * _GIB))
 _VAE_1080P_ACTIVE_BYTES = int(round(3.65 * _GIB))
 _VAE_1080P_PIXELS = 1920 * 1088
 _VAE_OUTPUT_CHANNELS = 3
 _VAE_HOST_PIXEL_WORKING_SET_BYTES = 256 * _MIB
 _VAE_TEMPORAL_PIECE_FRAMES = 17
+# ``decode_base`` first owns the complete FP32 decoded clip.  The established
+# single-tensor uint8 transport then creates another complete FP32 tensor for
+# the checkpoint pixel transform before quantization.  A hard-16-GiB 720p15
+# product run physically measured 12.60 GiB live immediately before that
+# second 3.811-GiB allocation, while the analytical materialized-decoder line
+# predicted 10.607 GiB.  Keep the observed ~2-GiB service envelope explicit;
+# otherwise a 16-GiB launcher can admit a graph that only a physical 24-GiB
+# card would survive.  This guard affects admission only and never numerics.
+_VAE_MATERIALIZED_SERVICE_GUARD_BYTES = 2 * _GIB
 
 _QUERY_CHUNK_CANDIDATES = (49_152, 32_768, 16_384, 8_192, 4_096, 2_048)
 # On the compact 2K route q=8k was both faster and lower-memory than q=16k
@@ -120,11 +130,37 @@ _COMPACT_QUERY_CHUNK_CANDIDATES = (8_192, 16_384, 32_768, 49_152, 4_096, 2_048)
 # simulator-only allocator reserve.
 _W4_COMPACT_QUERY_CHUNK_CANDIDATES = (4_096, 8_192, 2_048)
 
+# Sparse/Forecast scheduling changes how often expensive cells execute; it
+# does not remove the exact Dense anchors from the product trajectory.  A
+# Dense anchor may leave the compact Sparge graph and enter SageAttention's
+# full-context Q/K quantization path.  The latter owns complete Q/K/V rows and
+# a sequence-long centered-K temporary (``k - mean(k)`` in the pinned SM89
+# build).  The compact sparse estimate is therefore not a safe residency
+# envelope by itself.
+#
+# The 2026-08-31 W4A8 720p15 failure reached 21.31 GiB allocated with 49
+# resident blocks and then requested another 1.33 GiB centered-K tensor.  The
+# exact-streaming model tracks the non-resident Dense working set, while this
+# guard covers allocator/cache variance and the request-local quantization
+# temporary.  It is deliberately independent of sampling steps, Forecast
+# count and sparse keep ratio: those are latency/quality controls, not peak
+# VRAM capacity controls.
+_DENSE_ACTUAL_RUNTIME_GUARD_BYTES = int(round(1.50 * _GIB))
+_RESIDENCY_ADMISSION_GUARD_BYTES = 128 * _MIB
+# A distilled LoRA block includes adapter tensors absent from the original
+# W4/INT8 calibration, and SageAttention's FP8 Value quantizer requests one
+# final ~654-MiB workspace after the resident prefix is already live.  The
+# 2026-09-01 physical 720p long-window failure showed that the generic
+# 128-MiB residency reserve is insufficient even when actual block bytes are
+# used.  This guard changes only latency-oriented GPU residency, never model
+# weights, Attention precision or the sampling schedule.
+_LORA_RESIDENCY_ADMISSION_GUARD_BYTES = int(round(1.25 * _GIB))
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryExecutionDecision:
     requested_mode: MemoryExecutionMode
-    backend_profile: Literal["int8_24gb", "int8_16gb", "w4a8_8gb"]
+    backend_profile: ResourceBackendId
     selected_scheme: Literal[
         "whole_query", "exact_streaming", "compact_streaming"
     ]
@@ -133,6 +169,7 @@ class MemoryExecutionDecision:
     estimated_performance_peak_bytes: int
     estimated_dit_peak_bytes: int
     estimated_vae_materialized_peak_bytes: int
+    estimated_vae_postprocess_peak_bytes: int
     estimated_vae_host_peak_bytes: int
     estimated_vae_selected_peak_bytes: int
     estimated_selected_peak_bytes: int
@@ -152,7 +189,7 @@ class MemoryExecutionDecision:
 
     def telemetry(self) -> dict[str, object]:
         return {
-            "schema_version": "h3_isolated_resource_execution_v3",
+            "schema_version": "h3_isolated_resource_execution_v4",
             "policy": "minimum_predicted_latency_under_vram_budget",
             "resource_profile": self.resource_profile,
             "weight_tier": self.weight_tier,
@@ -177,6 +214,12 @@ class MemoryExecutionDecision:
             ),
             "estimated_vae_materialized_peak_gib": (
                 self.estimated_vae_materialized_peak_bytes / _GIB
+            ),
+            "estimated_vae_postprocess_peak_bytes": (
+                self.estimated_vae_postprocess_peak_bytes
+            ),
+            "estimated_vae_postprocess_peak_gib": (
+                self.estimated_vae_postprocess_peak_bytes / _GIB
             ),
             "estimated_vae_host_peak_bytes": self.estimated_vae_host_peak_bytes,
             "estimated_vae_host_peak_gib": (
@@ -261,6 +304,73 @@ def estimate_streaming_peak_bytes(
     return int(peak)
 
 
+def estimate_dense_actual_peak_bytes(
+    features: WorkloadFeatures,
+    *,
+    query_chunk_tokens: int | None,
+) -> int:
+    """Conservative non-weight peak of the heaviest exact Actual cell.
+
+    Compact K/V is an implementation detail of sparse cells.  Any trajectory
+    containing a Dense action must also fit this full-context envelope.  The
+    estimate intentionally ignores the number of Actual/Forecast evaluations:
+    one Dense cell is sufficient to establish the request peak.
+    """
+
+    chunk = 4_096 if query_chunk_tokens is None else int(query_chunk_tokens)
+    # The calibrated streaming estimator accepts aligned row chunks.  Product
+    # candidates already satisfy this contract, but keeping the helper total
+    # makes it safe for explicit/research plans as well.
+    chunk = max(128, chunk - chunk % 128)
+    return int(
+        estimate_streaming_peak_bytes(
+            features,
+            query_chunk_tokens=chunk,
+        )
+        + _DENSE_ACTUAL_RUNTIME_GUARD_BYTES
+    )
+
+
+def select_dense_safe_resident_blocks(
+    features: WorkloadFeatures,
+    decision: MemoryExecutionDecision,
+    *,
+    requested_blocks: int,
+    block_bytes: int,
+) -> tuple[int, int, int]:
+    """Clamp a latency-only resident prefix to the Dense Actual envelope.
+
+    Returns ``(selected_blocks, capacity_blocks, dense_peak_bytes)``.  The
+    result depends only on geometry/context and the physical backend budget;
+    sampling steps, Forecast evaluations and sparse ratios are intentionally
+    absent.
+    """
+
+    requested = int(requested_blocks)
+    block_size = int(block_bytes)
+    if not 0 <= requested < 50:
+        raise ValueError("requested resident blocks must lie inside [0, 49]")
+    if block_size <= 0:
+        raise ValueError("resident block size must be positive")
+    dense_peak = estimate_dense_actual_peak_bytes(
+        features,
+        query_chunk_tokens=decision.query_chunk_tokens,
+    )
+    residency_guard = (
+        _LORA_RESIDENCY_ADMISSION_GUARD_BYTES
+        if features.engine == "lora"
+        else _RESIDENCY_ADMISSION_GUARD_BYTES
+    )
+    capacity_bytes = max(
+        0,
+        int(decision.device_budget_bytes)
+        - residency_guard
+        - dense_peak,
+    )
+    capacity_blocks = min(49, capacity_bytes // block_size)
+    return min(requested, int(capacity_blocks)), int(capacity_blocks), dense_peak
+
+
 def estimate_compact_streaming_peak_bytes(
     features: WorkloadFeatures,
     *,
@@ -329,6 +439,26 @@ def estimate_vae_materialized_peak_bytes(features: WorkloadFeatures) -> int:
     return int(estimate_vae_host_streaming_peak_bytes(features) + decoded_fp32)
 
 
+def estimate_vae_postprocess_peak_bytes(features: WorkloadFeatures) -> int:
+    """Peak of the complete-GPU-output path through exact uint8 transport.
+
+    ``estimate_vae_materialized_peak_bytes`` stops when ``decode_base`` has
+    concatenated the complete FP32 clip.  Production still has to apply the
+    checkpoint pixel transform.  The non-streamed implementation needs a
+    second clip-sized FP32 workspace at that boundary, plus the physically
+    observed service envelope that is not present in the isolated VAE model.
+    """
+
+    decoded_fp32 = (
+        _VAE_OUTPUT_CHANNELS * int(features.output_pixel_frames) * 4
+    )
+    return int(
+        estimate_vae_materialized_peak_bytes(features)
+        + decoded_fp32
+        + _VAE_MATERIALIZED_SERVICE_GUARD_BYTES
+    )
+
+
 def select_vae_temporal_host_chunk(features: WorkloadFeatures) -> int:
     """Bound exact per-piece pixel conversion to a 256-MiB FP32 workspace."""
 
@@ -375,7 +505,12 @@ def select_memory_execution(
 
     if resource_profile is None:
         if weight_tier == "w4a8":
-            resource_profile = "w4a8_8gb"
+            provisioned_gib = device_budget_bytes / _GIB + 0.75
+            resource_profile = (
+                "w4a8_24gb" if provisioned_gib >= 20.0
+                else "w4a8_16gb" if provisioned_gib >= 12.0
+                else "w4a8_8gb"
+            )
         else:
             provisioned_gib = device_budget_bytes / _GIB + 0.75
             resource_profile = (
@@ -390,7 +525,17 @@ def select_memory_execution(
     # model construction, and the planner independently clamps admission here.
     # A 16GB launcher therefore cannot borrow spare capacity merely because it
     # happens to be tested on a 24GB development card.
-    device_budget_bytes = min(int(device_budget_bytes), profile_budget_bytes)
+    research_w4_capacity = os.environ.get(
+        "H3_NATIVE_RESEARCH_W4_VRAM_GIB", ""
+    ).strip()
+    if research_w4_capacity and weight_tier == "w4a8":
+        # Explicit calibration-only override. RuntimeConfig still enforces the
+        # allocator ceiling; this merely prevents the public 8-GiB backend
+        # definition from hiding the additional 16/24-GiB capacity being
+        # measured by the resource-knee benchmark.
+        device_budget_bytes = int(device_budget_bytes)
+    else:
+        device_budget_bytes = min(int(device_budget_bytes), profile_budget_bytes)
 
     # RuntimeConfig already removes 768 MiB from physical capacity.  Keep a
     # second 128-MiB allocator guard here (896 MiB total) without throwing away
@@ -403,12 +548,12 @@ def select_memory_execution(
     # ordinary full-K/V graph has passed the hard physical 8-GiB gate.
     exact_candidates = (
         _W4_COMPACT_QUERY_CHUNK_CANDIDATES
-        if resource_profile == "w4a8_8gb"
+        if weight_tier == "w4a8" and resource_profile == "w4a8_8gb"
         else _QUERY_CHUNK_CANDIDATES
     )
     compact_candidates = (
         _W4_COMPACT_QUERY_CHUNK_CANDIDATES
-        if resource_profile == "w4a8_8gb"
+        if weight_tier == "w4a8"
         else _COMPACT_QUERY_CHUNK_CANDIDATES
     )
     diagnostic_override = os.environ.get(
@@ -519,6 +664,7 @@ def select_memory_execution(
 
     dit_peak = selected_peak
     vae_materialized_peak = estimate_vae_materialized_peak_bytes(features)
+    vae_postprocess_peak = estimate_vae_postprocess_peak_bytes(features)
     vae_host_peak = estimate_vae_host_streaming_peak_bytes(features)
     if not include_vae:
         # UltimateUpscale pieces stop at clean latents.  The Video-VAE runs
@@ -526,8 +672,8 @@ def select_memory_execution(
         # every piece incorrectly rejects otherwise valid temporal windows.
         vae_selected_peak = 0
         vae_temporal_tile = None
-    elif vae_materialized_peak <= admission_budget:
-        vae_selected_peak = vae_materialized_peak
+    elif vae_postprocess_peak <= admission_budget:
+        vae_selected_peak = vae_postprocess_peak
         vae_temporal_tile = None
     else:
         vae_selected_peak = vae_host_peak
@@ -568,6 +714,7 @@ def select_memory_execution(
         estimated_performance_peak_bytes=performance_peak,
         estimated_dit_peak_bytes=dit_peak,
         estimated_vae_materialized_peak_bytes=vae_materialized_peak,
+        estimated_vae_postprocess_peak_bytes=vae_postprocess_peak,
         estimated_vae_host_peak_bytes=vae_host_peak,
         estimated_vae_selected_peak_bytes=vae_selected_peak,
         estimated_selected_peak_bytes=selected_peak,
@@ -596,9 +743,12 @@ __all__ = [
     "MemoryExecutionMode",
     "estimate_performance_peak_bytes",
     "estimate_compact_streaming_peak_bytes",
+    "estimate_dense_actual_peak_bytes",
     "estimate_streaming_peak_bytes",
     "estimate_vae_host_streaming_peak_bytes",
     "estimate_vae_materialized_peak_bytes",
+    "estimate_vae_postprocess_peak_bytes",
     "select_vae_temporal_host_chunk",
     "select_memory_execution",
+    "select_dense_safe_resident_blocks",
 ]
